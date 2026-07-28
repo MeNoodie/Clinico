@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from datetime import datetime
 from typing import Literal, Optional
   
@@ -66,3 +66,14 @@ class GuidedCoordinatorOutput(BaseModel):
         default=None,
         description="Doctor name if patient expressed a preference."
     )
+
+    @field_validator("appointment_id", mode="before")
+    @classmethod
+    def coerce_appointment_id(cls, v):
+        """Coerce string appointment IDs (e.g. '22') to int gracefully."""
+        if v is None:
+            return None
+        try:
+            return int(v)
+        except (ValueError, TypeError):
+            return None

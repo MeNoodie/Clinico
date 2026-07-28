@@ -39,16 +39,29 @@ def coordinator_node(state: AgentState) -> AgentState:
 
     if existing_intent:
         # ── Guided / multi-turn mode ──────────────────────────────────────────
+
+        # Fast-path: if we're waiting for appointment_id and the user's message
+        # is (or contains) a plain integer, extract it directly without an LLM call.
+        awaiting = state.get("awaiting_fields") or []
+        user_msg = (state.get("query") or "").strip()
+        
+        direct_appt_id: int | None = state.get("appointment_id")
+        if "appointment_id" in awaiting and not direct_appt_id:
+            import re
+            nums = re.findall(r"\b\d+\b", user_msg)
+            if nums:
+                direct_appt_id = int(nums[0])
+
         result = invoke_coordinator_guided(
             intent=existing_intent,
-            user_message=state["query"],
+            user_message=user_msg,
             conversation_history=state.get("conversation_history", []),
-            awaiting_fields=state.get("awaiting_fields", []),
+            awaiting_fields=awaiting,
         )
 
         merged_problem    = state.get("problem")    or result.problem
         merged_datetime   = state.get("appointment_datetime") or result.appointment_datetime
-        merged_appt_id    = state.get("appointment_id")  or result.appointment_id
+        merged_appt_id    = direct_appt_id or result.appointment_id
         merged_dept       = state.get("department")  or result.department
         merged_doctor     = state.get("preferred_doctor") or result.preferred_doctor
 
@@ -59,11 +72,11 @@ def coordinator_node(state: AgentState) -> AgentState:
             "appointment_datetime": merged_datetime,
             "appointment_id":       merged_appt_id,
         }
-        awaiting = [f for f in required if not current.get(f)]
+        new_awaiting = [f for f in required if not current.get(f)]
 
         # Append user turn to conversation history
         history = list(state.get("conversation_history") or [])
-        history.append({"role": "user", "content": state["query"]})
+        history.append({"role": "user", "content": user_msg})
 
         return {
             **state,
@@ -72,7 +85,7 @@ def coordinator_node(state: AgentState) -> AgentState:
             "appointment_datetime": merged_datetime,
             "appointment_id":       merged_appt_id,
             "preferred_doctor":     merged_doctor,
-            "awaiting_fields":      awaiting,
+            "awaiting_fields":      new_awaiting,
             "conversation_history": history,
             "current_step":         "coordinator_done",
         }
