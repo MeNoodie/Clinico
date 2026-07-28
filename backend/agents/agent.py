@@ -13,6 +13,7 @@ from backend.prompts.prompt import (
     SAFETY_PROMPT,
     RESPONSE_PROMPT,
     COORDINATOR_PROMPT,
+    GUIDED_COORDINATOR_PROMPT,
     APPOINTMENT_PROMPT,
     CANCEL_PROMPT,
     RESCHEDULE_PROMPT,
@@ -23,6 +24,7 @@ from backend.prompts.prompt import (
 from backend.structured.output_str import (
     SafetyOutput,
     CoordinatorOutput,
+    GuidedCoordinatorOutput,
     RouterOutput,
 )
 
@@ -102,6 +104,8 @@ safety_llm = get_llm("fast").with_structured_output(SafetyOutput)
 
 coordinator_llm = get_llm("fast").with_structured_output(CoordinatorOutput)
 
+guided_coordinator_llm = get_llm("fast").with_structured_output(GuidedCoordinatorOutput)
+
 router_llm = get_llm("fast").with_structured_output(RouterOutput)
 
 
@@ -166,6 +170,34 @@ def invoke_coordinator_agent(query: str) -> CoordinatorOutput:
             current_date=date.today().isoformat(),
         )
     )
+
+
+def invoke_coordinator_guided(
+    intent: str,
+    user_message: str,
+    conversation_history: list[dict],
+    awaiting_fields: list[str],
+) -> GuidedCoordinatorOutput:
+    """Extract only the missing fields from a patient reply during a guided session.
+
+    Used when the intent is already known (button-click entry).  The LLM never
+    re-detects intent; it only fills in whichever fields are listed in
+    ``awaiting_fields``.
+    """
+    history_text = "\n".join(
+        f"{turn['role'].capitalize()}: {turn['content']}"
+        for turn in conversation_history
+    ) or "(no prior messages)"
+
+    prompt = GUIDED_COORDINATOR_PROMPT.format(
+        intent=intent,
+        conversation_history=history_text,
+        user_message=user_message,
+        awaiting_fields=", ".join(awaiting_fields) if awaiting_fields else "none",
+        current_date=date.today().isoformat(),
+    )
+    return guided_coordinator_llm.invoke(prompt)
+
 
 
 def invoke_router_agent(**state) -> RouterOutput:

@@ -23,3 +23,8 @@ class AgentState(TypedDict):
     final_message: NotRequired[str]
     current_step: NotRequired[str]
     error: NotRequired[str | None]
+    # --- Guided / multi-turn conversation fields ---
+    session_id: NotRequired[str | None]
+    conversation_history: NotRequired[list[dict]]   # [{role, content}, ...]
+    awaiting_fields: NotRequired[list[str]]          # fields still needed
+    multi_turn: NotRequired[bool]                    # True for session-based calls
