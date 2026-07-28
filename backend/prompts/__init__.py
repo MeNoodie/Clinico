@@ -1,0 +1,23 @@
+"""Shared prompts for Clinico agents."""
+
+from backend.prompts.prompt import (
+    COORDINATOR_PROMPT,
+    RESPONSE_PROMPT,
+    SAFETY_PROMPT,
+    APPOINTMENT_PROMPT,
+    CANCEL_PROMPT,
+    RESCHEDULE_PROMPT,
+    FOLLOWUP_PROMPT,
+    ROUTER_PROMPT,
+)
+
+__all__ = [
+    "COORDINATOR_PROMPT",
+    "RESPONSE_PROMPT",
+    "SAFETY_PROMPT",
+    "APPOINTMENT_PROMPT",
+    "CANCEL_PROMPT",
+    "RESCHEDULE_PROMPT",
+    "FOLLOWUP_PROMPT",
+    "ROUTER_PROMPT",
+]
