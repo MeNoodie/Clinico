@@ -58,7 +58,6 @@ def _get_appointment_details(
         "patient_problem": appointment.patient_problem,
         "status": appointment.status.value,
         "created_at": appointment.created_at.isoformat() if appointment.created_at else None,
-        "updated_at": appointment.updated_at.isoformat() if appointment.updated_at else None,
     }
 
 
