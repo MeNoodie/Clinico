@@ -5,6 +5,8 @@ langchain
 langchain_community
 langchain-groq
 langchain-google-genai
+langchain-huggingface
+huggingface-hub
 langchain-core
 passlib[bcrypt]
 python-jose[cryptography]
@@ -12,3 +14,4 @@ sqlalchemy
 uvicorn
 pyyaml
 langgraph-checkpoint-sqlite
+logfire[fastapi]

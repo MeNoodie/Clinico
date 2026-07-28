@@ -1,23 +1,3 @@
-"""LangGraph workflow for Clinico — with MemorySaver in-memory checkpointing.
-
-Architecture
-------------
-The graph supports two entry modes:
-
-1. Natural-language (single-shot or multi-turn via /chat/appointments or /chat/test):
-   The Coordinator detects intent + extracts all fields.  If called via the
-   session API (multi_turn=True) and fields are still missing, the graph
-   pauses at the ``waiting_for_user`` node and saves state via MemorySaver.
-   The next /session/reply call resumes with the same thread_id.
-
-2. Guided / button-click (multi_turn=True, intent pre-seeded):
-   The Coordinator skips intent detection and only extracts the missing fields
-   from the user's latest message.  Same pause/resume mechanic via MemorySaver.
-
-Single-shot calls (/chat/test, /chat/appointments) always use multi_turn=False
-so they never hit the waiting_for_user node.
-"""
-
 from __future__ import annotations
 
 import uuid
@@ -54,18 +34,7 @@ EMERGENCY_MESSAGE = (
 # =============================================================================
 
 def coordinator_node(state: AgentState) -> AgentState:
-    """Coordinator node — dual-mode: natural-language or guided multi-turn.
-
-    Natural-language mode (``intent`` not in state):
-        LLM extracts intent + all booking facts from the raw query.
-
-    Guided mode (``intent`` already set by button-click):
-        LLM extracts only the still-missing fields from the user's reply.
-        Existing non-None values are never overwritten.
-
-    In both modes, ``awaiting_fields`` is (re-)computed after extraction so the
-    ``coordinator_complete_route`` can decide whether to pause or proceed.
-    """
+   
     existing_intent: str | None = state.get("intent")
 
     if existing_intent:
@@ -132,11 +101,9 @@ def coordinator_node(state: AgentState) -> AgentState:
 
 
 def waiting_for_user_node(state: AgentState) -> AgentState:
-    """Pause point: ask the next clarifying question and save state via checkpointer.
 
-    The graph ends at this node.  The next call with the same thread_id will
-    restore the full state and re-run from the coordinator with the new query.
-    """
+    """Pause point: ask the next clarifying question and save state via checkpointer."""
+    
     awaiting = state.get("awaiting_fields") or []
     if awaiting:
         question = FIELD_QUESTIONS.get(awaiting[0], f"Please provide your {awaiting[0]}.")

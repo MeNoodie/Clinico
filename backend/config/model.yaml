@@ -1,4 +1,4 @@
-default_model: fast
+default_model: llama
 
 models:
   fast:
@@ -10,7 +10,14 @@ models:
 
   llama:
     provider: groq
-    model: llama-3.1-8b-instant
+    model: llama-3.3-70b-versatile
     temperature: 0.2
     max_tokens: 1024
     api_key_env: GROQ_API_KEY
+
+  medium:
+    provider: huggingface
+    model: Qwen/Qwen3-8B-Instruct
+    temperature: 0.2
+    max_tokens: 1024
+    api_key_env: HUGGINGFACE_API_KEY

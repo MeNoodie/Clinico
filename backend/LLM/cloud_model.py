@@ -13,6 +13,7 @@ import os
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_groq import ChatGroq
+from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint
 import yaml
 
 
@@ -38,8 +39,8 @@ def _load_model_configs() -> tuple[str, dict[str, dict]]:
             raise ValueError(
                 f"model '{name}' is missing required field(s): {', '.join(sorted(missing))}"
             )
-        if model_config["provider"] not in {"groq", "google"}:
-            raise ValueError(f"model '{name}' provider must be either 'groq' or 'google'")
+        if model_config["provider"] not in {"groq", "google", "huggingface"}:
+            raise ValueError(f"model '{name}' provider must be either 'groq', 'google', or 'huggingface'")
     return default_model, models
 
 
@@ -72,6 +73,14 @@ def get_llm(model_name: str | None = None):
 
     if config["provider"] == "groq":
         return ChatGroq(api_key=api_key, **common_options)
+
+    if config["provider"] == "huggingface":
+        llm = HuggingFaceEndpoint(
+            repo_id=config["model"],
+            huggingfacehub_api_token=api_key,
+            **common_options
+        )
+        return ChatHuggingFace(llm=llm)
 
     # Google uses a different keyword for its key, but the same YAML shape.
     return ChatGoogleGenerativeAI(google_api_key=api_key, **common_options)

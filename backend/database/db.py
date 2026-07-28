@@ -6,8 +6,10 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 
-DATABASE_PATH = Path(__file__).resolve().parent / "clinico.db"
-DATABASE_URL = f"sqlite:///{DATABASE_PATH.as_posix()}"
+import os
+
+DATABASE_PATH = Path(os.getenv("SQLITE_DB_PATH", (Path(__file__).resolve().parent / "clinico.db").as_posix()))
+DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{DATABASE_PATH.as_posix()}")
 
 
 class Base(DeclarativeBase):

@@ -1,5 +1,7 @@
 """
+
 LangChain agents used by the Clinico workflow.
+
 """
 
 from datetime import date, datetime
@@ -101,13 +103,13 @@ def get_appointment_details_tool(
 
 fast_llm = get_llm("llama")
 
-safety_llm = get_llm("fast").with_structured_output(SafetyOutput)
+safety_llm = get_llm("llama").with_structured_output(SafetyOutput)
 
-coordinator_llm = get_llm("fast").with_structured_output(CoordinatorOutput)
+coordinator_llm = get_llm("llama").with_structured_output(CoordinatorOutput)
 
-guided_coordinator_llm = get_llm("fast").with_structured_output(GuidedCoordinatorOutput)
+guided_coordinator_llm = get_llm("llama").with_structured_output(GuidedCoordinatorOutput)
 
-router_llm = get_llm("fast").with_structured_output(RouterOutput)
+router_llm = get_llm("llama").with_structured_output(RouterOutput)
 
 
 # ==============================================================================
