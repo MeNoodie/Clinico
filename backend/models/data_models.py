@@ -146,3 +146,43 @@ class Appointment(Base):
         Index("ix_appointments_doctor_datetime", "doctor_id", "appointment_datetime"),
         Index("ix_appointments_department_datetime", "department_id", "appointment_datetime"),
     )
+
+
+class ActionType(str, Enum):
+    BOOK = "BOOK"
+    CANCEL = "CANCEL"
+    RESCHEDULE = "RESCHEDULE"
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    action_type: Mapped[ActionType] = mapped_column(
+        SqlEnum(ActionType, native_enum=False, create_constraint=True),
+        nullable=False,
+    )
+    details: Mapped[str | None] = mapped_column(Text, nullable=True)
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp(), nullable=False
+    )
+
+    patient: Mapped[Patient] = relationship()
+
+
+class MedicalDocument(Base):
+    __tablename__ = "medical_documents"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    appointment_id: Mapped[int | None] = mapped_column(ForeignKey("appointments.id"), index=True, nullable=True)
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    file_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    uploaded_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp(), nullable=False
+    )
+
+    patient: Mapped[Patient] = relationship()
+    appointment: Mapped[Appointment | None] = relationship()
+

@@ -11,9 +11,11 @@ POST /chat/session/reply  — send the next message in a guided session
 from __future__ import annotations
 
 import uuid
+import os
+import shutil
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
 from pydantic import BaseModel, Field
 
 from backend.agents.graph import (
@@ -22,7 +24,8 @@ from backend.agents.graph import (
     run_booking_workflow,
 )
 from backend.auth.dependencies import get_current_patient
-from backend.models.data_models import Patient
+from backend.database.db import SessionLocal
+from backend.models.data_models import Patient, MedicalDocument
 from backend.session.store import (
     INTENT_GREETING,
     REQUIRED_FIELDS,
@@ -52,6 +55,7 @@ class TestChatRequest(BaseModel):
 
     patient_id: int = Field(description="ID of a seeded patient (1–6)")
     message: str = Field(min_length=2, max_length=2_000)
+    session_id: str | None = Field(default=None, description="Optional session ID for multi-turn testing")
     problem: str | None = Field(default=None, max_length=2_000)
     department: str | None = Field(default=None, max_length=100)
     appointment_datetime: str | None = Field(
@@ -152,17 +156,33 @@ def create_appointment(
 @router.post("/test", response_model=ChatResponse, summary="Test workflow without JWT")
 def test_appointment(payload: TestChatRequest) -> ChatResponse:
     """Unauthenticated endpoint for Swagger testing. Uses patient_id directly."""
-    initial: dict = {
-        "query":                payload.message,
-        "patient_id":           payload.patient_id,
-        "problem":              payload.problem or payload.message,
-        "department":           payload.department,
-        "appointment_datetime": payload.appointment_datetime,
-        "multi_turn":           False,  # single-shot
-    }
-    if payload.appointment_id is not None:
-        initial["appointment_id"] = payload.appointment_id
-    state = run_booking_workflow(initial)
+    if payload.session_id:
+        existing = get_thread_state(payload.session_id)
+        if existing:
+            state = resume_workflow(payload.session_id, payload.message)
+        else:
+            initial: dict = {
+                "query":                payload.message,
+                "patient_id":           payload.patient_id,
+                "problem":              payload.problem or payload.message,
+                "department":           payload.department,
+                "appointment_datetime": payload.appointment_datetime,
+                "appointment_id":       payload.appointment_id,
+                "multi_turn":           True,
+            }
+            state = run_booking_workflow(initial, thread_id=payload.session_id)
+    else:
+        initial: dict = {
+            "query":                payload.message,
+            "patient_id":           payload.patient_id,
+            "problem":              payload.problem or payload.message,
+            "department":           payload.department,
+            "appointment_datetime": payload.appointment_datetime,
+            "multi_turn":           False,  # single-shot
+        }
+        if payload.appointment_id is not None:
+            initial["appointment_id"] = payload.appointment_id
+        state = run_booking_workflow(initial)
     return ChatResponse(
         message=state.get("final_message", ""),
         department=state.get("department"),

@@ -22,6 +22,8 @@ from backend.models.data_models import (
     Doctor,
     DoctorWorkingDay,
     Patient,
+    AuditLog,
+    ActionType,
 )
 
 
@@ -221,6 +223,13 @@ def book_appointment(
         )
         session.add(appointment)
         try:
+            session.flush()
+            audit_log = AuditLog(
+                patient_id=patient_id,
+                action_type=ActionType.BOOK,
+                details=f"Booked appointment {appointment.id} with Doctor {doctor.name} at {scheduled_at.isoformat()}"
+            )
+            session.add(audit_log)
             session.commit()
         except IntegrityError as exc:
             session.rollback()

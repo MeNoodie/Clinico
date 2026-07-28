@@ -6,6 +6,7 @@ from datetime import date, datetime
 
 from langchain.agents import create_agent
 from langchain.tools import tool
+from langsmith import traceable
 
 from backend.LLM.cloud_model import get_llm
 
@@ -157,11 +158,13 @@ followup_agent = create_agent(
 # INVOKE HELPERS
 # ==============================================================================
 
+@traceable(name="SafetyAgent")
 def invoke_safety_agent(query: str) -> SafetyOutput:
     """Classify a patient message as NORMAL or EMERGENCY."""
     return safety_llm.invoke(SAFETY_PROMPT.format(query=query))
 
 
+@traceable(name="CoordinatorAgent")
 def invoke_coordinator_agent(query: str) -> CoordinatorOutput:
     """Extract structured booking facts from a patient message."""
     return coordinator_llm.invoke(
@@ -172,6 +175,7 @@ def invoke_coordinator_agent(query: str) -> CoordinatorOutput:
     )
 
 
+@traceable(name="GuidedCoordinatorAgent")
 def invoke_coordinator_guided(
     intent: str,
     user_message: str,
@@ -200,6 +204,7 @@ def invoke_coordinator_guided(
 
 
 
+@traceable(name="RouterAgent")
 def invoke_router_agent(**state) -> RouterOutput:
     """Map a patient problem to a hospital department."""
     return router_llm.invoke(
@@ -207,6 +212,7 @@ def invoke_router_agent(**state) -> RouterOutput:
     )
 
 
+@traceable(name="AppointmentAgent")
 def invoke_appointment_agent(**state):
     user_msg = (
         f"Book appointment for patient_id={state['patient_id']}, "
@@ -219,6 +225,7 @@ def invoke_appointment_agent(**state):
     return _parse_agent_response(last, state)
 
 
+@traceable(name="CancelAgent")
 def invoke_cancel_agent(**state):
     user_msg = (
         f"Cancel appointment_id={state['appointment_id']} "
@@ -229,6 +236,7 @@ def invoke_cancel_agent(**state):
     return _parse_agent_response(last, state)
 
 
+@traceable(name="RescheduleAgent")
 def invoke_reschedule_agent(**state):
     user_msg = (
         f"Reschedule appointment_id={state['appointment_id']} "
@@ -241,6 +249,7 @@ def invoke_reschedule_agent(**state):
     return _parse_agent_response(last, state)
 
 
+@traceable(name="FollowupAgent")
 def invoke_followup_agent(**state):
     user_msg = (
         f"Get details for appointment_id={state['appointment_id']} "
@@ -251,6 +260,7 @@ def invoke_followup_agent(**state):
     return _parse_agent_response(last, state)
 
 
+@traceable(name="ResponseAgent")
 def invoke_response_agent(**workflow_facts) -> str:
     response = fast_llm.invoke(
         RESPONSE_PROMPT.format(**workflow_facts)

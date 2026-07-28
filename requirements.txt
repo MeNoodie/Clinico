@@ -11,3 +11,4 @@ python-jose[cryptography]
 sqlalchemy
 uvicorn
 pyyaml
+langgraph-checkpoint-sqlite

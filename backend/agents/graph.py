@@ -22,8 +22,10 @@ from __future__ import annotations
 
 import uuid
 
-from langgraph.checkpoint.memory import MemorySaver
+import sqlite3
+from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import START, END, StateGraph
+from backend.database.db import DATABASE_PATH
 
 from backend.agents.state import AgentState
 from backend.agents.agent import (
@@ -312,8 +314,10 @@ def intent_route(state: AgentState) -> str:
 # Graph
 # =============================================================================
 
-# Single shared in-memory checkpointer (swap for SqliteSaver/PostgresSaver later)
-_checkpointer = MemorySaver()
+# Single shared SQLite checkpointer
+_conn = sqlite3.connect(DATABASE_PATH.as_posix(), check_same_thread=False)
+_checkpointer = SqliteSaver(_conn)
+_checkpointer.setup()
 
 
 def build_graph():

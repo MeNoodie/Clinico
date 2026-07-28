@@ -15,7 +15,7 @@ from backend.tools.appointment_tools import (
     _get_patient_appointment,
     _validate_booked_appointment,
 )
-from backend.models.data_models import AppointmentStatus
+from backend.models.data_models import AppointmentStatus, AuditLog, ActionType
 
 
 def _process_cancel_request(
@@ -34,6 +34,14 @@ def _process_cancel_request(
     appointment = _get_patient_appointment(session, appointment_id, patient_id)
     _validate_booked_appointment(appointment)
     appointment.status = AppointmentStatus.CANCELLED
+    
+    audit_log = AuditLog(
+        patient_id=patient_id,
+        action_type=ActionType.CANCEL,
+        details=f"Cancelled appointment {appointment.id}"
+    )
+    session.add(audit_log)
+
     session.commit()
     return {
         "status": "CANCELLED",

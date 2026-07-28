@@ -17,6 +17,8 @@ from backend.models.data_models import (
     Appointment,
     AppointmentStatus,
     Doctor,
+    AuditLog,
+    ActionType,
 )
 from backend.tools.appointment_tools import (
     _validate_datetime,
@@ -80,6 +82,14 @@ def _process_reschedule_request(
     appointment.appointment_datetime = validated_dt
     if patient_problem is not None:
         appointment.patient_problem = patient_problem
+        
+    audit_log = AuditLog(
+        patient_id=patient_id,
+        action_type=ActionType.RESCHEDULE,
+        details=f"Rescheduled appointment {appointment.id} to {validated_dt.isoformat()}"
+    )
+    session.add(audit_log)
+    
     session.commit()
     return {
         "status": "RESCHEDULED",
