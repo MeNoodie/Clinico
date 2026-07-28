@@ -1,0 +1,21 @@
+[project]
+name = "clinico"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi[standard]",
+    "python-dotenv",
+    "langchain",
+    "langgraph",
+    "langchain-community",
+    "langchain-core",
+    "langchain-groq",
+    "langchain-google-genai",
+    "passlib[bcrypt]",
+    "python-jose[cryptography]",
+    "sqlalchemy",
+    "uvicorn",
+    "pyyaml",
+]

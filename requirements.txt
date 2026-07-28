@@ -1,0 +1,13 @@
+fastapi[standard]
+python-dotenv
+langgraph
+langchain
+langchain_community
+langchain-groq
+langchain-google-genai
+langchain-core
+passlib[bcrypt]
+python-jose[cryptography]
+sqlalchemy
+uvicorn
+pyyaml
