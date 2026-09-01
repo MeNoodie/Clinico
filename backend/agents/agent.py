@@ -1,9 +1,3 @@
-"""
-
-LangChain agents used by the Clinico workflow.
-
-"""
-
 from datetime import date, datetime
 
 from langchain.agents import create_agent

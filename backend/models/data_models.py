@@ -116,6 +116,23 @@ class User(Base):
 
     patient: Mapped[Patient | None] = relationship(back_populates="user", uselist=False)
 
+class Admin(Base):
+    __tablename__ = "admins"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    admin_id: Mapped[str] = mapped_column(
+        String(50),
+        unique=True,
+        nullable=False,
+        index=True
+    )
+
+    password_hash: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False
+    )
+    
 
 class Appointment(Base):
     __tablename__ = "appointments"

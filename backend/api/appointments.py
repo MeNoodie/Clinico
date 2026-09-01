@@ -34,3 +34,5 @@ def get_appointment_history(
             "department_name": appt.department.name if appt.department else "Unknown",
         })
     return {"history": results}
+
+

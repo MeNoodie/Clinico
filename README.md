@@ -14,7 +14,6 @@ A single LLM prompt cannot handle the complex safety checks, specialized routing
 
 ## 🛠️ Tech Stack
 - **Backend:** FastAPI, LangGraph, LangChain, SQLAlchemy, SQLite
-- **Frontend:** React, Vite, TailwindCSS, React Router
 - **LLMs:** Groq, Gemini, Hugging Face
 - **Observability:** LangSmith (Agent Tracing), Pydantic Logfire (Application Logging)
 - **Deployment:** Docker, Render
@@ -31,13 +30,8 @@ A single LLM prompt cannot handle the complex safety checks, specialized routing
   - `/models` - Pydantic data models and SQLAlchemy ORM models.
   - `/tools` - Tools used by the Action Agents to interact with the database.
   - `/session` - Session ownership tracking for multi-turn chats.
-- `/frontend-react` - The Vite React frontend.
-  - `/src/components` - Reusable UI components (Navbar, ChatMessage).
-  - `/src/contexts` - React context for Auth state.
-  - `/src/pages` - Application pages (Dashboard, Chat, Login, etc.).
-  - `/src/hooks` - Custom hooks like `useChat.js`.
-- `main.py` - The FastAPI application entrypoint (serves both API and static frontend assets).
-- `Dockerfile` - Multi-stage build for deploying the full stack.
+- `main.py` - The FastAPI application entrypoint.
+- `Dockerfile` - Backend container build.
 - `render.yaml` - Infrastructure-as-Code for Render deployment.
 
 ---
@@ -81,17 +75,6 @@ The system uses SQLite (via SQLAlchemy) with the following core tables:
 
 ---
 
-## 💻 Frontend Pages
-
-- **Landing Page (`/`)**: Marketing and entry point.
-- **Login/Register (`/login`, `/register`)**: Authentication.
-- **Dashboard (`/dashboard`)**: The main hub with quick action buttons (Book, Reschedule, etc.).
-- **Chat (`/chat`)**: The conversational UI interfacing with the LangGraph backend.
-- **History (`/history`)**: Table view of past and upcoming appointments.
-- **Documents (`/documents`)**: View and upload medical records.
-
----
-
 ## 🚀 Installation & Local Run
 
 ### Environment Variables
@@ -107,18 +90,9 @@ uv pip install -r requirements.txt
 uvicorn main:app --reload
 ```
 
-### Frontend (React)
-```bash
-cd frontend-react
-npm install
-npm run dev
-```
-
----
-
 ## 🐳 Docker Deployment
 
-To build and run the entire stack in a single container:
+To build and run the API in a single container:
 ```bash
 docker build -t agentcare .
 docker run -p 8000:8000 --env-file .env agentcare

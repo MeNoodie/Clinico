@@ -28,7 +28,7 @@ class AuthResponse(BaseModel):
     patient_id: int
 
 
-@router.post("/signup", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/signup", response_model=AuthResponse, status_code=status.HTTP_201_CREATED, summary="User / Patient Signup")
 def signup(payload: SignupRequest, db: Annotated[Session, Depends(get_db)]):
     email, phone, name = payload.email.strip().lower(), payload.phone.strip(), payload.name.strip()
     existing = db.query(User).filter(or_(User.email == email, User.phone == phone)).first()
@@ -50,3 +50,4 @@ def signup(payload: SignupRequest, db: Annotated[Session, Depends(get_db)]):
     return AuthResponse(
         access_token=create_access_token(user.id), user_id=user.id, patient_id=patient.id
     )
+

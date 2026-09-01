@@ -375,7 +375,7 @@ def run_booking_workflow(
 ) -> AgentState:
     """Invoke the graph from scratch (or resume an existing thread).
 
-    * Single-shot calls (``/chat/test``, ``/chat/appointments``): pass
+    * Single-shot calls (e.g. ``/chat/appointments``): pass
       ``thread_id=None``; a fresh UUID is created so each call is isolated.
     * First reply in a guided session: pass the ``session_id`` as
       ``thread_id``; this creates the checkpoint for that thread.

@@ -1,10 +1,19 @@
 from __future__ import annotations
+import sys
+from pathlib import Path
+
+# Ensure project root is in sys.path when running scripts directly
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from datetime import datetime
+import pytest
 
 from backend.tools.appointment_tools import process_booking_request
 
 
-def test_booking():
+def test_booking_request():
     booking_request = {
         "patient_id": 1,
         "department_name": "cardiology",
@@ -12,32 +21,16 @@ def test_booking():
         "patient_problem": "chest pain",
     }
 
-    try:
-        result = process_booking_request(**booking_request)
-
-        if result["status"] == "BOOKED":
-            print("\n✅ Appointment Booked Successfully")
-            print("-" * 40)
-            print(f"Appointment ID : {result['appointment_id']}")
-            print(f"Patient ID     : 1")
-            print(f"Doctor ID      : {result['doctor_id']}")
-            print(f"Doctor Name    : {result['doctor_name']}")
-            print(f"Department     : {result['department']}")
-            print(f"Date & Time    : {result['appointment_datetime']}")
-            print(f"Problem        : {result['patient_problem']}")
-            print(f"Status         : {result['status']}")
-
-        elif result["status"] == "SUGGEST_SLOT":
-
-            print("\n❌ Requested slot unavailable.")
-            print("\nAvailable Slots:")
-
-            for slot in result["available_slots"]:
-                print(f" • {slot}")
-
-    except Exception as e:
-        print(f"\nError: {e}")
+    result = process_booking_request(**booking_request)
+    assert result is not None
+    assert "status" in result
+    assert result["status"] in ("BOOKED", "SUGGEST_SLOT")
+    if result["status"] == "BOOKED":
+        assert result["appointment_id"] is not None
+        assert result["doctor_name"] is not None
+    elif result["status"] == "SUGGEST_SLOT":
+        assert "available_slots" in result
 
 
 if __name__ == "__main__":
-    test_booking()
+    pytest.main([__file__])

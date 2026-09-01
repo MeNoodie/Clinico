@@ -6,7 +6,7 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
-from backend.auth.security import decode_access_token
+from backend.auth.security import decode_access_token, decode_token_payload
 from backend.database.db import SessionLocal
 from backend.models.data_models import Patient, User
 
@@ -42,3 +42,16 @@ def get_current_patient(
     if patient is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Patient profile not found")
     return patient
+
+
+def get_current_admin(
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(bearer_scheme)],
+) -> dict:
+    try:
+        payload = decode_token_payload(credentials.credentials)
+    except (RuntimeError, ValueError):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
+
+    if payload.get("role") != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin privileges required")
+    return payload

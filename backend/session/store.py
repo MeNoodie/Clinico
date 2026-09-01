@@ -60,6 +60,18 @@ FIELD_QUESTIONS: dict[str, str] = {
 }
 
 
+def get_intent_greeting(intent: str | None, appointment_id: int | None = None) -> str:
+    """Generate dynamic greeting for guided workflow, contextualizing appointment_id if present."""
+    if appointment_id and intent:
+        if intent == "CANCEL_APPOINTMENT":
+            return f"I see you'd like to cancel appointment #{appointment_id}. Are you sure you want to proceed?"
+        if intent == "RESCHEDULE_APPOINTMENT":
+            return f"I see you'd like to reschedule appointment #{appointment_id}. What date and time would you prefer?"
+        if intent == "FOLLOWUP_APPOINTMENT":
+            return f"I see you'd like to schedule a follow-up for appointment #{appointment_id}. Processing your follow-up request..."
+    return INTENT_GREETING.get(intent or "", "How can I help you today?")
+
+
 # ---------------------------------------------------------------------------
 # Session ownership store
 # ---------------------------------------------------------------------------
@@ -68,16 +80,23 @@ _DEFAULT_TTL: int = 30 * 60  # 30 minutes
 
 
 class _OwnerEntry:
-    __slots__ = ("patient_id", "intent", "expires_at")
+    __slots__ = ("patient_id", "intent", "appointment_id", "expires_at")
 
-    def __init__(self, patient_id: int, intent: str | None, ttl: int) -> None:
+    def __init__(
+        self,
+        patient_id: int,
+        intent: str | None,
+        ttl: int,
+        appointment_id: int | None = None,
+    ) -> None:
         self.patient_id = patient_id
         self.intent = intent
+        self.appointment_id = appointment_id
         self.expires_at = time.monotonic() + ttl
 
 
 class SessionOwnerStore:
-    """Thread-safe store that maps session_id → (patient_id, intent).
+    """Thread-safe store that maps session_id → (patient_id, intent, appointment_id).
 
     All conversation state lives in LangGraph's MemorySaver; this store only
     exists so the API layer can authenticate that a reply belongs to the
@@ -94,12 +113,18 @@ class SessionOwnerStore:
         patient_id: int,
         intent: str | None = None,
         session_id: str | None = None,
+        appointment_id: int | None = None,
     ) -> str:
         """Create and return a new session_id."""
         self._cleanup()
         sid = session_id or str(uuid.uuid4())
         with self._lock:
-            self._entries[sid] = _OwnerEntry(patient_id, intent, self._ttl)
+            self._entries[sid] = _OwnerEntry(
+                patient_id=patient_id,
+                intent=intent,
+                ttl=self._ttl,
+                appointment_id=appointment_id,
+            )
         return sid
 
     def get(self, session_id: str) -> _OwnerEntry | None:

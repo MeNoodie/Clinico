@@ -3,7 +3,6 @@
 Endpoints
 ---------
 POST /chat/appointments   — single-shot, JWT-auth, natural-language
-POST /chat/test           — single-shot, no JWT (Swagger testing)
 POST /chat/session/start  — begin a guided multi-turn session (button click)
 POST /chat/session/reply  — send the next message in a guided session
 """
@@ -29,6 +28,7 @@ from backend.models.data_models import Patient, MedicalDocument
 from backend.session.store import (
     INTENT_GREETING,
     REQUIRED_FIELDS,
+    get_intent_greeting,
     store as session_store,
 )
 
@@ -50,24 +50,6 @@ class ChatRequest(BaseModel):
     )
 
 
-class TestChatRequest(BaseModel):
-    """Swagger-friendly request — accepts patient_id directly (no JWT)."""
-
-    patient_id: int = Field(description="ID of a seeded patient (1–6)")
-    message: str = Field(min_length=2, max_length=2_000)
-    session_id: str | None = Field(default=None, description="Optional session ID for multi-turn testing")
-    problem: str | None = Field(default=None, max_length=2_000)
-    department: str | None = Field(default=None, max_length=100)
-    appointment_datetime: str | None = Field(
-        default=None,
-        description="Preferred local ISO-8601 datetime, e.g. 2026-07-28T10:00:00",
-    )
-    appointment_id: int | None = Field(
-        default=None,
-        description="Existing appointment ID (for cancel / reschedule / followup)",
-    )
-
-
 class ChatResponse(BaseModel):
     message: str
     department: str | None = None
@@ -85,16 +67,15 @@ class ChatResponse(BaseModel):
 class SessionStartRequest(BaseModel):
     """Kick off a guided workflow from a UI button click."""
 
-    intent: str | None = Field(
-        default=None,
-        description=(
+    intent: str | None = Field(default=None,description=(
             "Pre-seeded intent from the button: BOOK_APPOINTMENT, "
             "CANCEL_APPOINTMENT, RESCHEDULE_APPOINTMENT, "
             "FOLLOWUP_APPOINTMENT, UPLOAD_DOCUMENT. "
             "Omit (or pass null) for natural-language entry."
         ),
     )
-
+    appointment_id: int | None = Field(default=None,
+        description="Target appointment ID for reschedule, cancel, or follow-up workflows")
 
 class SessionStartResponse(BaseModel):
     session_id: str
@@ -153,45 +134,7 @@ def create_appointment(
     )
 
 
-@router.post("/test", response_model=ChatResponse, summary="Test workflow without JWT")
-def test_appointment(payload: TestChatRequest) -> ChatResponse:
-    """Unauthenticated endpoint for Swagger testing. Uses patient_id directly."""
-    if payload.session_id:
-        existing = get_thread_state(payload.session_id)
-        if existing:
-            state = resume_workflow(payload.session_id, payload.message)
-        else:
-            initial: dict = {
-                "query":                payload.message,
-                "patient_id":           payload.patient_id,
-                "problem":              payload.problem or payload.message,
-                "department":           payload.department,
-                "appointment_datetime": payload.appointment_datetime,
-                "appointment_id":       payload.appointment_id,
-                "multi_turn":           True,
-            }
-            state = run_booking_workflow(initial, thread_id=payload.session_id)
-    else:
-        initial: dict = {
-            "query":                payload.message,
-            "patient_id":           payload.patient_id,
-            "problem":              payload.problem or payload.message,
-            "department":           payload.department,
-            "appointment_datetime": payload.appointment_datetime,
-            "multi_turn":           False,  # single-shot
-        }
-        if payload.appointment_id is not None:
-            initial["appointment_id"] = payload.appointment_id
-        state = run_booking_workflow(initial)
-    return ChatResponse(
-        message=state.get("final_message", ""),
-        department=state.get("department"),
-        intent=state.get("intent", "UNKNOWN"),
-        safety_status=state.get("safety_status", "UNKNOWN"),
-        appointment_id=state.get("appointment_id"),
-        booked_datetime=state.get("booked_datetime"),
-        alternative_slots=state.get("alt_slots", []),
-    )
+
 
 
 # =============================================================================
@@ -216,16 +159,18 @@ def session_start(
     """
     session_id = str(uuid.uuid4())
     intent     = payload.intent
+    appt_id    = payload.appointment_id
 
     # Register ownership for auth validation in subsequent replies
     session_store.register(
         patient_id=patient.id,
         intent=intent,
         session_id=session_id,
+        appointment_id=appt_id,
     )
 
     # Return the greeting immediately without invoking the LLM
-    greeting = INTENT_GREETING.get(intent or "", "How can I help you today?")
+    greeting = get_intent_greeting(intent, appointment_id=appt_id)
     return SessionStartResponse(session_id=session_id, message=greeting)
 
 
@@ -279,7 +224,10 @@ def session_reply(
         # First reply — no LangGraph checkpoint yet.
         # Build the complete initial state with intent + awaiting_fields.
         intent   = entry.intent
+        appt_id  = getattr(entry, "appointment_id", None)
         required = REQUIRED_FIELDS.get(intent or "", [])
+        awaiting = [f for f in required if not (f == "appointment_id" and appt_id)]
+
         initial_state: dict = {
             "query":                payload.message,
             "patient_id":           patient.id,
@@ -287,9 +235,9 @@ def session_reply(
             "problem":              None,
             "department":           None,
             "appointment_datetime": None,
-            "appointment_id":       None,
+            "appointment_id":       appt_id,
             "preferred_doctor":     None,
-            "awaiting_fields":      list(required),
+            "awaiting_fields":      awaiting,
             "conversation_history": [],
             "multi_turn":           True,
         }
