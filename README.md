@@ -72,6 +72,15 @@ The system uses SQLite (via SQLAlchemy) with the following core tables:
 - `POST /chat/session/start` - Start a guided multi-turn chat session.
 - `POST /chat/session/reply` - Send a message to an active chat session.
 - `GET /appointments/history` - Fetch a patient's appointment history.
+- `POST /appointments/{appointment_id}/cancel` - Open a cancellation assistant session.
+- `POST /appointments/{appointment_id}/reschedule` - Open a rescheduling assistant session.
+- `POST /appointments/{appointment_id}/followup` - Open a follow-up assistant session.
+
+The three appointment action endpoints verify that the appointment belongs to
+the authenticated patient and return the assistant `session_id`, first
+assistant `message`, appointment details, and `assistant_reply_url`. After
+opening the chat screen, send subsequent user messages to that reply URL with
+`{ "session_id": "...", "message": "..." }`.
 
 ---
 
