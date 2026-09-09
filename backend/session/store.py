@@ -15,10 +15,6 @@ import time
 import uuid
 
 
-# ---------------------------------------------------------------------------
-# Intent constants (imported by graph.py and api/chat.py)
-# ---------------------------------------------------------------------------
-
 # Required fields per intent that must be non-None before the workflow runs.
 REQUIRED_FIELDS: dict[str, list[str]] = {
     "BOOK_APPOINTMENT":       ["problem", "appointment_datetime"],
@@ -36,15 +32,14 @@ INTENT_GREETING: dict[str, str] = {
     ),
     "CANCEL_APPOINTMENT": (
         "I'll help you cancel an appointment. "
-        "Please provide your Appointment ID."
+        "Please provide the appointment id you want to cancel."
     ),
     "RESCHEDULE_APPOINTMENT": (
         "I'll help you reschedule an appointment. "
-        "Please provide your Appointment ID and your preferred new date and time."
+        "Please provide the appointment id you want to reschedule and the new date and time."
     ),
     "FOLLOWUP_APPOINTMENT": (
         "I'll help you schedule a follow-up. "
-        "Please provide your Appointment ID."
     ),
     "UPLOAD_DOCUMENT": (
         "Please upload your document and I will store it for you."

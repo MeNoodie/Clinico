@@ -259,24 +259,56 @@ def invoke_followup_agent(**state):
     return _parse_agent_response(last, state)
 
 
-@traceable(name="ResponseAgent")
-def invoke_response_agent(**workflow_facts) -> str:
-    response = fast_llm.invoke(
-        RESPONSE_PROMPT.format(**workflow_facts)
-    )
-    content = getattr(response, "content", response)
-    return content if isinstance(content, str) else str(content)
-
-
 # ==============================================================================
 # RESPONSE PARSER
 # ==============================================================================
 
 import json as _json
 
+
+def _extract_text(content) -> str:
+    """Safely extract a plain-text string from an LLM response content value.
+
+    Handles:
+    * str  — returned as-is.
+    * list — Anthropic-style content blocks: [{'type': 'text', 'text': '...'}, ...]
+             The text of all 'text' blocks is joined.
+    * anything else — falls back to str().
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, dict):
+                if block.get("type") == "text":
+                    parts.append(block.get("text", ""))
+            elif hasattr(block, "type") and getattr(block, "type", None) == "text":
+                parts.append(getattr(block, "text", ""))
+            else:
+                text_val = str(block)
+                if text_val:
+                    parts.append(text_val)
+        return "\n".join(p for p in parts if p).strip()
+    return str(content)
+
+
+@traceable(name="ResponseAgent")
+def invoke_response_agent(**workflow_facts) -> str:
+    response = fast_llm.invoke(
+        RESPONSE_PROMPT.format(**workflow_facts)
+    )
+    return _extract_text(getattr(response, "content", response))
+
+
 def _parse_agent_response(last_message, state: dict) -> dict:
     """Extract a dict from the agent's last AI message."""
     content = getattr(last_message, "content", last_message)
+
+    # Unwrap Anthropic content-block lists before any further processing
+    if isinstance(content, list):
+        content = _extract_text(content)
+
     if isinstance(content, dict):
         return content
 
