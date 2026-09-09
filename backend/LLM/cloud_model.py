@@ -41,6 +41,9 @@ def _load_model_configs() -> tuple[str, dict[str, dict]]:
             )
         if model_config["provider"] not in {"groq", "google", "huggingface"}:
             raise ValueError(f"model '{name}' provider must be either 'groq', 'google', or 'huggingface'")
+        for field in required:
+            if not isinstance(model_config[field], str) or not model_config[field].strip():
+                raise ValueError(f"model '{name}' field '{field}' must be a non-empty string")
     return default_model, models
 
 
@@ -75,10 +78,20 @@ def get_llm(model_name: str | None = None):
         return ChatGroq(api_key=api_key, **common_options)
 
     if config["provider"] == "huggingface":
+        # HuggingFaceEndpoint uses ``repo_id`` as its model identifier.  Do
+        # not also pass the provider-neutral ``model`` option: the client
+        # rejects requests containing both.
+        huggingface_options = {
+            "temperature": config.get("temperature", 0),
+            "max_new_tokens": config.get("max_tokens"),
+        }
+        huggingface_options = {
+            key: value for key, value in huggingface_options.items() if value is not None
+        }
         llm = HuggingFaceEndpoint(
-            repo_id=config["model"],
+            repo_id = str(config["model"]),
             huggingfacehub_api_token=api_key,
-            **common_options
+            **huggingface_options,
         )
         return ChatHuggingFace(llm=llm)
 

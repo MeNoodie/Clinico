@@ -95,15 +95,11 @@ def get_appointment_details_tool(
 # LLMs
 # ==============================================================================
 
-fast_llm = get_llm("llama")
-
+fast_llm = get_llm("fast")
 safety_llm = get_llm("llama").with_structured_output(SafetyOutput)
-
 coordinator_llm = get_llm("llama").with_structured_output(CoordinatorOutput)
-
 guided_coordinator_llm = get_llm("llama").with_structured_output(GuidedCoordinatorOutput)
-
-router_llm = get_llm("llama").with_structured_output(RouterOutput)
+router_llm = get_llm("fast")
 
 
 # ==============================================================================
@@ -116,7 +112,7 @@ coordinator_agent = create_agent(
 )
 
 router_agent = create_agent(
-    model=fast_llm,
+    model=router_llm,
     system_prompt=ROUTER_PROMPT,
 )
 
@@ -203,9 +199,16 @@ def invoke_coordinator_guided(
 @traceable(name="RouterAgent")
 def invoke_router_agent(**state) -> RouterOutput:
     """Map a patient problem to a hospital department."""
-    return router_llm.invoke(
-        ROUTER_PROMPT.format(**state)
-    )
+    response = router_llm.invoke(ROUTER_PROMPT.format(**state))
+    content = getattr(response, "content", response)
+    text = str(content).strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+    try:
+        return RouterOutput.model_validate_json(text)
+    except ValueError:
+        # A routing failure must not block a patient from reaching care.
+        return RouterOutput(department="General Medicine")
 
 
 @traceable(name="AppointmentAgent")

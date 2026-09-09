@@ -38,8 +38,7 @@ def coordinator_node(state: AgentState) -> AgentState:
     existing_intent: str | None = state.get("intent")
 
     if existing_intent:
-        # ── Guided / multi-turn mode ──────────────────────────────────────────
-
+       
         # Fast-path: if we're waiting for appointment_id and the user's message
         # is (or contains) a plain integer, extract it directly without an LLM call.
         awaiting = state.get("awaiting_fields") or []
@@ -402,4 +401,4 @@ def get_thread_state(thread_id: str) -> AgentState | None:
     snapshot = booking_graph.get_state(config)
     if snapshot is None or not snapshot.values:
         return None
-    return snapshot.values  # type: ignore[return-value]
+    return snapshot.values  
