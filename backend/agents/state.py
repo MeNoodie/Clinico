@@ -6,6 +6,7 @@ from typing import NotRequired, TypedDict
 class AgentState(TypedDict):
     
     query: str
+    raw_query: NotRequired[str | None]   # original input before query rewriting
     patient_id: int
     problem: str | None
     department: str | None

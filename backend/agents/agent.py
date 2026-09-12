@@ -9,6 +9,7 @@ from backend.LLM.cloud_model import get_llm
 from backend.prompts.prompt import (
     SAFETY_PROMPT,
     RESPONSE_PROMPT,
+    QUERY_REWRITER_PROMPT,
     COORDINATOR_PROMPT,
     GUIDED_COORDINATOR_PROMPT,
     APPOINTMENT_PROMPT,
@@ -150,21 +151,50 @@ followup_agent = create_agent(
 # INVOKE HELPERS
 # ==============================================================================
 
+@traceable(name="QueryRewriterAgent")
+def invoke_query_rewriter(query: str) -> str:
+    """Normalise raw patient input into clean English.
+
+    Translates Hinglish/Hindi, fixes typos, expands abbreviations, and
+    preserves all booking facts (symptoms, dates, IDs).  Falls back to
+    the original query if the LLM call fails.
+    """
+    if not query or not query.strip():
+        return query
+    try:
+        response = fast_llm.invoke(QUERY_REWRITER_PROMPT.format(query=query))
+        rewritten = _extract_text(getattr(response, "content", response)).strip()
+        if rewritten:
+            print(f"[QueryRewriter] '{query}' -> '{rewritten}'")
+            return rewritten
+    except Exception as exc:
+        print(f"[WARN] QueryRewriter error, using original query: {exc}")
+    return query
+
+
 @traceable(name="SafetyAgent")
 def invoke_safety_agent(query: str) -> SafetyOutput:
     """Classify a patient message as NORMAL or EMERGENCY."""
-    return safety_llm.invoke(SAFETY_PROMPT.format(query=query))
+    try:
+        return safety_llm.invoke(SAFETY_PROMPT.format(query=query))
+    except Exception as exc:
+        print(f"[WARN] SafetyAgent error, falling back to NORMAL: {exc}")
+        return SafetyOutput(status="NORMAL", reason="Fallback to routine booking.")
 
 
 @traceable(name="CoordinatorAgent")
 def invoke_coordinator_agent(query: str) -> CoordinatorOutput:
     """Extract structured booking facts from a patient message."""
-    return coordinator_llm.invoke(
-        COORDINATOR_PROMPT.format(
-            query=query,
-            current_date=date.today().isoformat(),
+    try:
+        return coordinator_llm.invoke(
+            COORDINATOR_PROMPT.format(
+                query=query,
+                current_date=date.today().isoformat(),
+            )
         )
-    )
+    except Exception as exc:
+        print(f"[WARN] CoordinatorAgent error, falling back: {exc}")
+        return CoordinatorOutput(intent="BOOK_APPOINTMENT")
 
 
 @traceable(name="GuidedCoordinatorAgent")
@@ -192,7 +222,11 @@ def invoke_coordinator_guided(
         awaiting_fields=", ".join(awaiting_fields) if awaiting_fields else "none",
         current_date=date.today().isoformat(),
     )
-    return guided_coordinator_llm.invoke(prompt)
+    try:
+        return guided_coordinator_llm.invoke(prompt)
+    except Exception as exc:
+        print(f"[WARN] GuidedCoordinator error, falling back: {exc}")
+        return GuidedCoordinatorOutput()
 
 
 
@@ -233,6 +267,7 @@ def invoke_cancel_agent(**state):
     result = cancel_agent.invoke({"messages": [("user", user_msg)]})
     last = result["messages"][-1]
     return _parse_agent_response(last, state)
+
 
 
 @traceable(name="RescheduleAgent")
