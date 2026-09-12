@@ -50,6 +50,8 @@ INTENT_GREETING: dict[str, str] = {
 FIELD_QUESTIONS: dict[str, str] = {
     "problem":              "What health concern or symptom are you experiencing?",
     "appointment_datetime": "What date and time would you prefer? (e.g. 28 July at 10 AM)",
+    "reschedule_datetime":  "What new date and time would you prefer? (e.g. 28 July at 10 AM)",
+    "followup_datetime":    "What date and time would you prefer for your follow-up? (e.g. 28 July at 10 AM)",
     "appointment_id":       "Please provide your Appointment ID.",
     "uploaded_file":        "Please upload your medical document.",
 }

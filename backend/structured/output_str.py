@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field, field_validator
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Literal, Optional, Union
   
  
 class CoordinatorOutput(BaseModel):
@@ -21,6 +21,15 @@ class CoordinatorOutput(BaseModel):
         default=None,
         description="date/time in ISO-8601 format (e.g. '2026-07-28T10:00:00')"
     )
+
+    @field_validator("problem", "department", "appointment_datetime", mode="before")
+    @classmethod
+    def clean_empty_strings(cls, v):
+        if v is None:
+            return None
+        if isinstance(v, str) and v.strip().lower() in {"none", "null", "none.", "n/a", ""}:
+            return None
+        return v
 
 
 class SafetyOutput(BaseModel):
@@ -58,7 +67,7 @@ class GuidedCoordinatorOutput(BaseModel):
         default=None,
         description="Appointment date/time in ISO-8601 (e.g. '2026-07-29T10:00:00')."
     )
-    appointment_id: Optional[int] = Field(
+    appointment_id: Optional[Union[int, str]] = Field(
         default=None,
         description="Integer appointment ID if the patient provided one."
     )
@@ -67,11 +76,22 @@ class GuidedCoordinatorOutput(BaseModel):
         description="Doctor name if patient expressed a preference."
     )
 
+    @field_validator("problem", "department", "appointment_datetime", "preferred_doctor", mode="before")
+    @classmethod
+    def clean_empty_strings(cls, v):
+        if v is None:
+            return None
+        if isinstance(v, str) and v.strip().lower() in {"none", "null", "none.", "n/a", ""}:
+            return None
+        return v
+
     @field_validator("appointment_id", mode="before")
     @classmethod
     def coerce_appointment_id(cls, v):
         """Coerce string appointment IDs (e.g. '22') to int gracefully."""
         if v is None:
+            return None
+        if isinstance(v, str) and v.strip().lower() in {"none", "null", "none.", "n/a", ""}:
             return None
         try:
             return int(v)

@@ -9,6 +9,7 @@ from backend.database.db import DATABASE_PATH
 
 from backend.agents.state import AgentState
 from backend.agents.agent import (
+    invoke_query_rewriter,
     invoke_safety_agent,
     invoke_coordinator_agent,
     invoke_coordinator_guided,
@@ -29,9 +30,52 @@ EMERGENCY_MESSAGE = (
 )
 
 
+def _try_parse_datetime(text: str, base_date=None) -> str | None:
+    """Best-effort Python datetime extraction using dateutil.
+
+    Returns an ISO-8601 string with zeroed seconds (e.g. '2026-09-12T09:30:00')
+    or None.  ``base_date`` (a datetime) overrides the default when the user
+    gives only a time like "9:30 AM" after seeing a list of slots on a specific
+    date — without it, dateutil would fall back to today's date.
+    """
+    try:
+        from datetime import datetime as _dt
+        from dateutil.parser import parse as _parse
+        # Use midnight of base_date (or today) so unspecified time components
+        # don't inherit random seconds from the current clock.
+        default_dt = (base_date or _dt.now()).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        result = _parse(text, fuzzy=True, default=default_dt)
+        # Always zero out seconds/microseconds for clean slot matching.
+        result = result.replace(second=0, microsecond=0)
+        return result.strftime("%Y-%m-%dT%H:%M:%S")
+    except Exception:
+        return None
+
+
 # =============================================================================
 # Nodes
 # =============================================================================
+
+def query_rewriter_node(state: AgentState) -> AgentState:
+    """Normalise raw patient input before the coordinator sees it.
+
+    Translates Hinglish/Hindi, fixes typos, and expands abbreviations while
+    preserving every booking fact (symptom, date, time, appointment ID).
+    The rewritten text replaces ``query`` in state; the original is kept in
+    ``raw_query`` for debugging.
+    """
+    raw = state.get("query") or ""
+    # Only rewrite on the very first turn (no intent yet) OR when a new user
+    # message arrives during a guided session (existing_intent is set).
+    rewritten = invoke_query_rewriter(raw)
+    return {
+        **state,
+        "raw_query": raw,
+        "query":     rewritten,
+    }
+
 
 def coordinator_node(state: AgentState) -> AgentState:
    
@@ -39,17 +83,32 @@ def coordinator_node(state: AgentState) -> AgentState:
 
     if existing_intent:
        
-        # Fast-path: if we're waiting for appointment_id and the user's message
-        # is (or contains) a plain integer, extract it directly without an LLM call.
         awaiting = state.get("awaiting_fields") or []
         user_msg = (state.get("query") or "").strip()
         
+        # Fast-path 1: appointment_id — extract a bare integer without an LLM call.
         direct_appt_id: int | None = state.get("appointment_id")
         if "appointment_id" in awaiting and not direct_appt_id:
             import re
             nums = re.findall(r"\b\d+\b", user_msg)
             if nums:
                 direct_appt_id = int(nums[0])
+
+        # Fast-path 2: appointment_datetime — use dateutil before calling the LLM
+        # so Groq tool-call failures never cause an infinite "What date?" loop.
+        # If we previously showed alt_slots, use the date from the first slot as
+        # the base so "9:30 AM" means the same day the slots were on, not today.
+        direct_datetime: str | None = state.get("appointment_datetime")
+        if "appointment_datetime" in awaiting and not direct_datetime:
+            base_date = None
+            alt_slots = state.get("alt_slots") or []
+            if alt_slots:
+                try:
+                    from datetime import datetime as _slot_dt
+                    base_date = _slot_dt.fromisoformat(alt_slots[0])
+                except Exception:
+                    pass
+            direct_datetime = _try_parse_datetime(user_msg, base_date=base_date)
 
         result = invoke_coordinator_guided(
             intent=existing_intent,
@@ -58,9 +117,10 @@ def coordinator_node(state: AgentState) -> AgentState:
             awaiting_fields=awaiting,
         )
 
+        # Prefer fast-path values; fall back to LLM extraction.
         merged_problem    = state.get("problem")    or result.problem
-        merged_datetime   = state.get("appointment_datetime") or result.appointment_datetime
-        merged_appt_id    = direct_appt_id or result.appointment_id
+        merged_datetime   = direct_datetime          or result.appointment_datetime
+        merged_appt_id    = direct_appt_id          or result.appointment_id
         merged_dept       = state.get("department")  or result.department
         merged_doctor     = state.get("preferred_doctor") or result.preferred_doctor
 
@@ -94,9 +154,14 @@ def coordinator_node(state: AgentState) -> AgentState:
 
     intent   = result.intent
     required = REQUIRED_FIELDS.get(intent, [])
+
+    # Fast-path: if the LLM failed to extract appointment_datetime (returned None),
+    # try to parse it directly from the query string using dateutil.
+    result_datetime = result.appointment_datetime or _try_parse_datetime(state["query"])
+
     current  = {
         "problem":              result.problem,
-        "appointment_datetime": result.appointment_datetime,
+        "appointment_datetime": result_datetime,
         "appointment_id":       state.get("appointment_id"),
     }
     awaiting = [f for f in required if not current.get(f)]
@@ -106,7 +171,7 @@ def coordinator_node(state: AgentState) -> AgentState:
         "intent":               result.intent,
         "problem":              result.problem,
         "department":           result.department,
-        "appointment_datetime": result.appointment_datetime,
+        "appointment_datetime": result_datetime,
         "awaiting_fields":      awaiting,
         "current_step":         "coordinator_done",
     }
@@ -168,9 +233,17 @@ def appointment_node(state: AgentState) -> AgentState:
             "appointment_id":  result["appointment_id"],
             "booked_datetime": result["appointment_datetime"],
             "doctor_name":     result.get("doctor_name"),
+            "alt_slots":       [],
             "current_step":    "appointment_done",
         }
-    return {**state, "alt_slots": result.get("available_slots", []), "current_step": "appointment_done"}
+    # Slot unavailable — store alt_slots and clear the chosen datetime so the
+    # patient can pick a new one.  In multi-turn mode we will loop back to ask.
+    return {
+        **state,
+        "alt_slots":             result.get("available_slots", []),
+        "appointment_datetime": None,   # clear the rejected slot
+        "current_step":          "appointment_slots_shown",
+    }
 
 
 def cancel_node(state: AgentState) -> AgentState:
@@ -201,9 +274,16 @@ def reschedule_node(state: AgentState) -> AgentState:
             **state,
             "appointment_id":  result.get("appointment_id", state.get("appointment_id")),
             "booked_datetime": result.get("new_datetime", result.get("appointment_datetime")),
+            "alt_slots":       [],
             "current_step":    "reschedule_done",
         }
-    return {**state, "alt_slots": result.get("available_slots", []), "current_step": "reschedule_done"}
+    # Slot unavailable — present alternatives and loop back for a new datetime.
+    return {
+        **state,
+        "alt_slots":            result.get("available_slots", []),
+        "appointment_datetime": None,   # clear the rejected slot
+        "current_step":         "reschedule_slots_shown",
+    }
 
 
 def followup_node(state: AgentState) -> AgentState:
@@ -243,6 +323,44 @@ def emergency_node(state: AgentState) -> AgentState:
         "emergency_message": EMERGENCY_MESSAGE,
         "final_message":     EMERGENCY_MESSAGE,
         "current_step":      "emergency_done",
+    }
+
+
+def appointment_slots_node(state: AgentState) -> AgentState:
+    """Pause point after appointment slot conflict — present alt_slots and re-ask for datetime."""
+    message = invoke_response_agent(
+        department=state.get("department"),
+        doctor_name=state.get("doctor_name"),
+        appointment_id=None,
+        booked_datetime=None,
+        alt_slots=state.get("alt_slots", []),
+        error=None,
+        problem=state.get("problem"),
+    )
+    return {
+        **state,
+        "final_message":   message,
+        "awaiting_fields": ["appointment_datetime"],
+        "current_step":    "waiting_for_user",
+    }
+
+
+def reschedule_slots_node(state: AgentState) -> AgentState:
+    """Pause point after reschedule slot conflict — present alt_slots and re-ask for datetime."""
+    message = invoke_response_agent(
+        department=state.get("department"),
+        doctor_name=state.get("doctor_name"),
+        appointment_id=state.get("appointment_id"),
+        booked_datetime=None,
+        alt_slots=state.get("alt_slots", []),
+        error=None,
+        problem=state.get("problem"),
+    )
+    return {
+        **state,
+        "final_message":   message,
+        "awaiting_fields": ["appointment_datetime"],
+        "current_step":    "waiting_for_user",
     }
 
 
@@ -299,23 +417,41 @@ _checkpointer = SqliteSaver(_conn)
 _checkpointer.setup()
 
 
+def appointment_route(state: AgentState) -> str:
+    """After appointment node: if slot conflict in multi-turn, show alt slots and pause."""
+    if state.get("current_step") == "appointment_slots_shown" and state.get("multi_turn"):
+        return "appointment_slots"
+    return "response"
+
+
+def reschedule_route(state: AgentState) -> str:
+    """After reschedule node: if slot conflict in multi-turn, show alt slots and pause."""
+    if state.get("current_step") == "reschedule_slots_shown" and state.get("multi_turn"):
+        return "reschedule_slots"
+    return "response"
+
+
 def build_graph():
     graph = StateGraph(AgentState)
 
     # Nodes
-    graph.add_node("coordinator",      coordinator_node)
-    graph.add_node("waiting_for_user", waiting_for_user_node)
-    graph.add_node("safety",           safety_node)
-    graph.add_node("router",           router_node)
-    graph.add_node("appointment",      appointment_node)
-    graph.add_node("cancel",           cancel_node)
-    graph.add_node("reschedule",       reschedule_node)
-    graph.add_node("followup",         followup_node)
-    graph.add_node("emergency",        emergency_node)
-    graph.add_node("response",         response_node)
+    graph.add_node("query_rewriter",     query_rewriter_node)
+    graph.add_node("coordinator",        coordinator_node)
+    graph.add_node("waiting_for_user",   waiting_for_user_node)
+    graph.add_node("safety",             safety_node)
+    graph.add_node("router",             router_node)
+    graph.add_node("appointment",        appointment_node)
+    graph.add_node("appointment_slots",  appointment_slots_node)
+    graph.add_node("cancel",             cancel_node)
+    graph.add_node("reschedule",         reschedule_node)
+    graph.add_node("reschedule_slots",   reschedule_slots_node)
+    graph.add_node("followup",           followup_node)
+    graph.add_node("emergency",          emergency_node)
+    graph.add_node("response",           response_node)
 
-    # START → coordinator
-    graph.add_edge(START, "coordinator")
+    # START → query_rewriter → coordinator
+    graph.add_edge(START, "query_rewriter")
+    graph.add_edge("query_rewriter", "coordinator")
 
     # coordinator → waiting_for_user (pause) OR → safety (proceed)
     graph.add_conditional_edges(
@@ -329,6 +465,9 @@ def build_graph():
 
     # waiting_for_user → END (state checkpointed; next call resumes here)
     graph.add_edge("waiting_for_user", END)
+
+    # appointment_slots → END (state checkpointed; patient picks a new slot)
+    graph.add_edge("appointment_slots", END)
 
     # safety branches: EMERGENCY → emergency, else → router
     graph.add_conditional_edges(
@@ -350,13 +489,29 @@ def build_graph():
         },
     )
 
-    # all action nodes → response → END
-    graph.add_edge("appointment", "response")
-    graph.add_edge("cancel",      "response")
-    graph.add_edge("reschedule",  "response")
-    graph.add_edge("followup",    "response")
-    graph.add_edge("emergency",   END)
-    graph.add_edge("response",    END)
+    # appointment → show slots (multi-turn conflict) OR → response (booked/single-shot)
+    graph.add_conditional_edges(
+        "appointment",
+        appointment_route,
+        {
+            "appointment_slots": "appointment_slots",
+            "response":          "response",
+        },
+    )
+    # reschedule → show slots (multi-turn conflict) OR → response (rescheduled/single-shot)
+    graph.add_conditional_edges(
+        "reschedule",
+        reschedule_route,
+        {
+            "reschedule_slots": "reschedule_slots",
+            "response":         "response",
+        },
+    )
+    graph.add_edge("reschedule_slots", END)
+    graph.add_edge("cancel",     "response")
+    graph.add_edge("followup",   "response")
+    graph.add_edge("emergency",  END)
+    graph.add_edge("response",   END)
 
     return graph.compile(checkpointer=_checkpointer)
 

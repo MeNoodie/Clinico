@@ -15,7 +15,7 @@ from backend.tools.appointment_tools import process_booking_request
 
 def test_booking_request():
     booking_request = {
-        "patient_id": 1,
+        "patient_id": 17,
         "department_name": "cardiology",
         "appointment_datetime": datetime(2026, 7, 27, 11, 0),
         "patient_problem": "chest pain",
@@ -30,6 +30,8 @@ def test_booking_request():
         assert result["doctor_name"] is not None
     elif result["status"] == "SUGGEST_SLOT":
         assert "available_slots" in result
+
+
 
 
 if __name__ == "__main__":

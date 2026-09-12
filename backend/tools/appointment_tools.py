@@ -7,7 +7,7 @@ from synchronous agent tools.
 
 from __future__ import annotations
 
-from datetime import datetime, time, timedelta
+from datetime import datetime, timedelta
 from typing import TypeAlias
 
 from sqlalchemy import select
@@ -36,18 +36,39 @@ AppointmentResult: TypeAlias = dict[str, object]
 
 
 def _validate_datetime(appointment_datetime: datetime) -> datetime:
-    """Validate and normalize a requested appointment datetime.
 
-    SQLite stores naive datetimes in this application.  Timezone-aware values
-    are rejected so comparisons cannot silently use a different local time.
-    """
     if not isinstance(appointment_datetime, datetime):
-        raise ValueError("appointment_datetime must be a datetime instance")
-    if appointment_datetime.tzinfo is not None and appointment_datetime.utcoffset() is not None:
-        raise ValueError("appointment_datetime must be timezone-naive")
+        raise ValueError(
+            "appointment_datetime must be a datetime instance"
+        )
+
+    if (
+        appointment_datetime.tzinfo is not None
+        and appointment_datetime.utcoffset() is not None
+    ):
+        raise ValueError(
+            "appointment_datetime must be timezone-naive"
+        )
+
     if appointment_datetime.second or appointment_datetime.microsecond:
-        raise ValueError("appointment_datetime must be precise to the minute")
+        raise ValueError(
+            "appointment_datetime must be precise to the minute"
+        )
+
+    # Cannot book appointment in the past
+    if appointment_datetime < datetime.now():
+        raise ValueError(
+            "Cannot book an appointment in the past"
+        )
+
     return appointment_datetime
+
+
+def _validate_id(value: int, field_name: str) -> int:
+    """Validate an integer database identifier."""
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ValueError(f"{field_name} must be an integer")
+    return value
 
 
 def _get_department(session: Session, department_name: str) -> Department:
@@ -65,8 +86,7 @@ def _get_department(session: Session, department_name: str) -> Department:
 
 def _get_doctors(session: Session, department_id: int) -> list[Doctor]:
     """Fetch doctors for an existing department, in a stable order."""
-    if not isinstance(department_id, int) or isinstance(department_id, bool):
-        raise ValueError("department_id must be an integer")
+    _validate_id(department_id, "department_id")
     return list(
         session.scalars(
             select(Doctor).where(Doctor.department_id == department_id).order_by(Doctor.id)
@@ -102,8 +122,7 @@ def _is_slot_available(session: Session, doctor_id: int, appointment_datetime: d
 
 def _get_patient(session: Session, patient_id: int) -> Patient:
     """Fetch a patient to prevent orphaned bookings when SQLite FKs are disabled."""
-    if not isinstance(patient_id, int) or isinstance(patient_id, bool):
-        raise ValueError("patient_id must be an integer")
+    _validate_id(patient_id, "patient_id")
     patient = session.get(Patient, patient_id)
     if patient is None:
         raise ValueError(f"Patient with id {patient_id} does not exist")
@@ -114,8 +133,7 @@ def _get_patient_appointment(
     session: Session, appointment_id: int, patient_id: int
 ) -> Appointment:
     """Fetch an appointment only when it belongs to the requesting patient."""
-    if not isinstance(appointment_id, int) or isinstance(appointment_id, bool):
-        raise ValueError("appointment_id must be an integer")
+    _validate_id(appointment_id, "appointment_id")
     _get_patient(session, patient_id)
     appointment = session.get(Appointment, appointment_id)
     if appointment is None:
@@ -131,6 +149,22 @@ def _validate_booked_appointment(appointment: Appointment) -> None:
         raise ValueError(
             f"Only BOOKED appointments can be changed; this appointment is {appointment.status.value}"
         )
+
+
+def _get_doctor_for_department(
+    session: Session, doctor_id: int, department_id: int
+) -> Doctor:
+    """Fetch a doctor and ensure it belongs to the requested department."""
+    _validate_id(doctor_id, "doctor_id")
+    _validate_id(department_id, "department_id")
+    doctor = session.get(Doctor, doctor_id)
+    if doctor is None:
+        raise ValueError(f"Doctor with id {doctor_id} does not exist")
+    if doctor.department_id != department_id:
+        raise ValueError("doctor_id does not belong to department_id")
+    if session.get(Department, department_id) is None:
+        raise ValueError(f"Department with id {department_id} does not exist")
+    return doctor
 
 
 def get_department_by_name(department_name: str) -> Department:
@@ -190,22 +224,12 @@ def book_appointment(
         RuntimeError: If the database cannot persist the appointment.
     """
     scheduled_at = _validate_datetime(appointment_datetime)
-    if not isinstance(doctor_id, int) or isinstance(doctor_id, bool):
-        raise ValueError("doctor_id must be an integer")
-    if not isinstance(department_id, int) or isinstance(department_id, bool):
-        raise ValueError("department_id must be an integer")
     if not isinstance(patient_problem, str) or not patient_problem.strip():
         raise ValueError("patient_problem must be a non-empty string")
 
     with SessionLocal() as session:
         _get_patient(session, patient_id)
-        doctor = session.get(Doctor, doctor_id)
-        if doctor is None:
-            raise ValueError(f"Doctor with id {doctor_id} does not exist")
-        if doctor.department_id != department_id:
-            raise ValueError("doctor_id does not belong to department_id")
-        if session.get(Department, department_id) is None:
-            raise ValueError(f"Department with id {department_id} does not exist")
+        doctor = _get_doctor_for_department(session, doctor_id, department_id)
         if not _is_doctor_working(session, doctor_id, scheduled_at):
             raise ValueError("Doctor is not working on the requested day")
         if not is_within_working_hours(doctor, scheduled_at):
