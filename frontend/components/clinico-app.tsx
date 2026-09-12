@@ -234,12 +234,12 @@ function ChatBubble({ msg, userInitial }: { msg: ChatMessage; userInitial: strin
 // ─── Agent Pipeline Trace ─────────────────────────────────────────────────────
 
 const PIPELINE_STEPS = [
-  { id: 'query',       label: 'User Query',          sub: 'Message received',              icon: MessageCircle, color: '#2e7de9' },
-  { id: 'coord',       label: 'Coordinator Agent',   sub: 'Analyzing intent…',             icon: BrainCircuit,  color: '#7c5ceb' },
-  { id: 'safety',      label: 'Safety Check',         sub: 'Validating request…',           icon: ShieldCheck,   color: '#13a56f' },
-  { id: 'router',      label: 'Routing Agent',        sub: 'Finding department…',           icon: Route,         color: '#e88c2e' },
-  { id: 'action',      label: 'Action Agent',         sub: 'Processing request…',           icon: Activity,      color: '#d4466e' },
-  { id: 'response',    label: 'Response Agent',       sub: 'Preparing your answer…',        icon: Sparkles,      color: '#2e7de9' },
+  { id: 'query', label: 'User Query', sub: 'Message received', icon: MessageCircle, color: '#2e7de9' },
+  { id: 'coord', label: 'Coordinator Agent', sub: 'Analyzing intent…', icon: BrainCircuit, color: '#7c5ceb' },
+  { id: 'safety', label: 'Safety Check', sub: 'Validating request…', icon: ShieldCheck, color: '#13a56f' },
+  { id: 'router', label: 'Routing Agent', sub: 'Finding department…', icon: Route, color: '#e88c2e' },
+  { id: 'action', label: 'Action Agent', sub: 'Processing request…', icon: Activity, color: '#d4466e' },
+  { id: 'response', label: 'Response Agent', sub: 'Preparing your answer…', icon: Sparkles, color: '#2e7de9' },
 ] as const
 
 function AgentPipelineTrace() {
@@ -261,14 +261,13 @@ function AgentPipelineTrace() {
       <div className="pipeline-steps">
         {PIPELINE_STEPS.map((step, i) => {
           const Icon = step.icon
-          const isDone    = i < activeStep
-          const isActive  = i === activeStep
+          const isDone = i < activeStep
+          const isActive = i === activeStep
           const isPending = i > activeStep
           return (
             <div key={step.id} className="pipeline-step-col">
-              <div className={`pipeline-node ${
-                isDone ? 'node-done' : isActive ? 'node-active' : 'node-pending'
-              }`} style={isActive || isDone ? { '--node-color': step.color } as React.CSSProperties : {}}>
+              <div className={`pipeline-node ${isDone ? 'node-done' : isActive ? 'node-active' : 'node-pending'
+                }`} style={isActive || isDone ? { '--node-color': step.color } as React.CSSProperties : {}}>
                 <div className="pipeline-icon">
                   {isDone
                     ? <Check size={11} />
@@ -283,9 +282,8 @@ function AgentPipelineTrace() {
                 </div>
               </div>
               {i < PIPELINE_STEPS.length - 1 && (
-                <div className={`pipeline-connector ${
-                  isDone ? 'connector-done' : isActive ? 'connector-active' : 'connector-pending'
-                }`} />
+                <div className={`pipeline-connector ${isDone ? 'connector-done' : isActive ? 'connector-active' : 'connector-pending'
+                  }`} />
               )}
             </div>
           )
@@ -1004,6 +1002,8 @@ function ConnectedApp({ view, go, auth, profile, logout }: {
         setSessionId('')
         loadAppointments()
       }
+      // If session has alternative_slots but is NOT done, the backend kept the session alive.
+      // The sessionId is preserved automatically so the next message continues the same session.
     } catch (e) {
       const errText = e instanceof Error ? e.message : 'Something went wrong. Please try again.'
       setMessages(prev => [...prev, mkMsg('system', errText)])
