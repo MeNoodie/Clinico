@@ -330,8 +330,20 @@ def _extract_text(content) -> str:
 
 @traceable(name="ResponseAgent")
 def invoke_response_agent(**workflow_facts) -> str:
+    # Directly confirm cancellations cleanly
+    if workflow_facts.get("cancel_status") == "CANCELLED" or (
+        workflow_facts.get("intent") == "CANCEL_APPOINTMENT" and not workflow_facts.get("error")
+    ):
+        appt_id = workflow_facts.get("appointment_id")
+        id_str = f" #{appt_id}" if appt_id else ""
+        return f"Your appointment{id_str} has been successfully cancelled. Please let us know if you need any further assistance."
+
+    # Filter out extra keys not expected by RESPONSE_PROMPT format
+    expected_keys = {"department", "doctor_name", "appointment_id", "booked_datetime", "alt_slots", "error", "problem"}
+    prompt_facts = {k: workflow_facts.get(k) for k in expected_keys}
+
     response = fast_llm.invoke(
-        RESPONSE_PROMPT.format(**workflow_facts)
+        RESPONSE_PROMPT.format(**prompt_facts)
     )
     return _extract_text(getattr(response, "content", response))
 
