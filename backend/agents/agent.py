@@ -1,4 +1,6 @@
-from datetime import date, datetime
+
+from google.genai._gaos.models import updatetrigger
+from datetime import datetime, timezone, timedelta
 
 from langchain.agents import create_agent
 from langchain.tools import tool
@@ -9,20 +11,16 @@ from backend.LLM.cloud_model import get_llm
 from backend.prompts.prompt import (
     SAFETY_PROMPT,
     RESPONSE_PROMPT,
-    QUERY_REWRITER_PROMPT,
     COORDINATOR_PROMPT,
-    GUIDED_COORDINATOR_PROMPT,
     APPOINTMENT_PROMPT,
     CANCEL_PROMPT,
     RESCHEDULE_PROMPT,
     FOLLOWUP_PROMPT,
     ROUTER_PROMPT,
 )
-
 from backend.structured.output_str import (
     SafetyOutput,
     CoordinatorOutput,
-    GuidedCoordinatorOutput,
     RouterOutput,
 )
 
@@ -31,10 +29,20 @@ from backend.tools.cancel_appointment import process_cancel_request
 from backend.tools.reschedule_appointment import process_reschedule_request
 from backend.tools.get_appointment_details import get_appointment_details
 
+# ----- Time ---------
 
-# ==============================================================================
-# TOOLS
-# ==============================================================================
+IST = timezone(timedelta(hours=5, minutes=30))
+current_date = datetime.now(IST).date().isoformat()
+
+#------ LLM ----------
+
+fast_llm = get_llm("fast")         
+safety_llm = get_llm("llama").with_structured_output(SafetyOutput)
+coordinator_llm = get_llm("llama").with_structured_output(CoordinatorOutput)
+router_llm = get_llm("fast").with_structured_output(RouterOutput)
+
+
+#------- tools ------
 
 @tool
 def process_booking_tool(
@@ -92,35 +100,8 @@ def get_appointment_details_tool(
     )
 
 
-# ==============================================================================
-# LLMs
-# ==============================================================================
+#------- Agnets -----------
 
-fast_llm = get_llm("fast")
-safety_llm = get_llm("llama").with_structured_output(SafetyOutput)
-coordinator_llm = get_llm("llama").with_structured_output(CoordinatorOutput)
-guided_coordinator_llm = get_llm("llama").with_structured_output(GuidedCoordinatorOutput)
-router_llm = get_llm("fast")
-
-
-# ==============================================================================
-# AGENTS
-# ==============================================================================
-
-coordinator_agent = create_agent(
-    model=coordinator_llm,
-    system_prompt=COORDINATOR_PROMPT,
-)
-
-router_agent = create_agent(
-    model=router_llm,
-    system_prompt=ROUTER_PROMPT,
-)
-
-safety_agent = create_agent(
-    model=safety_llm,
-    system_prompt=SAFETY_PROMPT,
-)
 
 appointment_agent = create_agent(
     model=fast_llm,
@@ -146,32 +127,6 @@ followup_agent = create_agent(
     system_prompt=FOLLOWUP_PROMPT,
 )
 
-
-# ==============================================================================
-# INVOKE HELPERS
-# ==============================================================================
-
-@traceable(name="QueryRewriterAgent")
-def invoke_query_rewriter(query: str) -> str:
-    """Normalise raw patient input into clean English.
-
-    Translates Hinglish/Hindi, fixes typos, expands abbreviations, and
-    preserves all booking facts (symptoms, dates, IDs).  Falls back to
-    the original query if the LLM call fails.
-    """
-    if not query or not query.strip():
-        return query
-    try:
-        response = fast_llm.invoke(QUERY_REWRITER_PROMPT.format(query=query))
-        rewritten = _extract_text(getattr(response, "content", response)).strip()
-        if rewritten:
-            print(f"[QueryRewriter] '{query}' -> '{rewritten}'")
-            return rewritten
-    except Exception as exc:
-        print(f"[WARN] QueryRewriter error, using original query: {exc}")
-    return query
-
-
 @traceable(name="SafetyAgent")
 def invoke_safety_agent(query: str) -> SafetyOutput:
     """Classify a patient message as NORMAL or EMERGENCY."""
@@ -185,186 +140,56 @@ def invoke_safety_agent(query: str) -> SafetyOutput:
 @traceable(name="CoordinatorAgent")
 def invoke_coordinator_agent(query: str) -> CoordinatorOutput:
     """Extract structured booking facts from a patient message."""
+    prompt = COORDINATOR_PROMPT.format(
+        query=query,
+        current_date=current_date)
     try:
-        return coordinator_llm.invoke(
-            COORDINATOR_PROMPT.format(
-                query=query,
-                current_date=date.today().isoformat(),
-            )
-        )
+        return coordinator_llm.invoke(prompt)
     except Exception as exc:
         print(f"[WARN] CoordinatorAgent error, falling back: {exc}")
-        return CoordinatorOutput(intent="BOOK_APPOINTMENT")
-
-
-@traceable(name="GuidedCoordinatorAgent")
-def invoke_coordinator_guided(
-    intent: str,
-    user_message: str,
-    conversation_history: list[dict],
-    awaiting_fields: list[str],
-) -> GuidedCoordinatorOutput:
-    """Extract only the missing fields from a patient reply during a guided session.
-
-    Used when the intent is already known (button-click entry).  The LLM never
-    re-detects intent; it only fills in whichever fields are listed in
-    ``awaiting_fields``.
-    """
-    history_text = "\n".join(
-        f"{turn['role'].capitalize()}: {turn['content']}"
-        for turn in conversation_history
-    ) or "(no prior messages)"
-
-    prompt = GUIDED_COORDINATOR_PROMPT.format(
-        intent=intent,
-        conversation_history=history_text,
-        user_message=user_message,
-        awaiting_fields=", ".join(awaiting_fields) if awaiting_fields else "none",
-        current_date=date.today().isoformat(),
-    )
-    try:
-        return guided_coordinator_llm.invoke(prompt)
-    except Exception as exc:
-        print(f"[WARN] GuidedCoordinator error, falling back: {exc}")
-        return GuidedCoordinatorOutput()
-
+        return CoordinatorOutput(intent="BOOK_APPOINTMENT")   # 
 
 
 @traceable(name="RouterAgent")
-def invoke_router_agent(**state) -> RouterOutput:
+def invoke_router_agent(query:str , problem :str | None , current_date : str) -> RouterOutput:
     """Map a patient problem to a hospital department."""
-    response = router_llm.invoke(ROUTER_PROMPT.format(**state))
-    content = getattr(response, "content", response)
-    text = str(content).strip()
-    if text.startswith("```"):
-        text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+    prompt = ROUTER_PROMPT.format(query=query,
+        problem=problem,
+        current_date=current_date)
     try:
-        return RouterOutput.model_validate_json(text)
-    except ValueError:
-        # A routing failure must not block a patient from reaching care.
-        return RouterOutput(department="General Medicine")
+        return router_llm.invoke(prompt) 
+    except Exception as exc:
+        print(f"[WARN] RouterAgent error {exc}")
+        return RouterOutput(
+        department=None,
+        appointment_datetime=None,
+        status="ERROR")
 
 
 @traceable(name="AppointmentAgent")
-def invoke_appointment_agent(**state):
-    user_msg = (
-        f"Book appointment for patient_id={state['patient_id']}, "
-        f"department={state['department_name']}, "
-        f"datetime={state['appointment_datetime']}, "
-        f"problem={state['problem']}"
-    )
-    result = appointment_agent.invoke({"messages": [("user", user_msg)]})
-    last = result["messages"][-1]
-    return _parse_agent_response(last, state)
+def invoke_appointment_agent(
+    patient_id: int,
+    department_name: str,
+    appointment_datetime: str,
+    patient_problem: str
+):
+    """Help book an appointment."""
 
+    message = {
+        "messages": [{
+                "role": "user",
+                "content": (
+                    f"Book an appointment.\n"
+                    f"Patient ID: {patient_id}\n"
+                    f"Department: {department_name}\n"
+                    f"Appointment datetime: {appointment_datetime}\n"
+                    f"Patient problem: {patient_problem}")}]}
 
-@traceable(name="CancelAgent")
-def invoke_cancel_agent(**state):
-    user_msg = (
-        f"Cancel appointment_id={state['appointment_id']} "
-        f"for patient_id={state['patient_id']}"
-    )
-    result = cancel_agent.invoke({"messages": [("user", user_msg)]})
-    last = result["messages"][-1]
-    return _parse_agent_response(last, state)
-
-
-
-@traceable(name="RescheduleAgent")
-def invoke_reschedule_agent(**state):
-    user_msg = (
-        f"Reschedule appointment_id={state['appointment_id']} "
-        f"for patient_id={state['patient_id']} "
-        f"to datetime={state['appointment_datetime']}, "
-        f"problem={state.get('problem')}"
-    )
-    result = reschedule_agent.invoke({"messages": [("user", user_msg)]})
-    last = result["messages"][-1]
-    return _parse_agent_response(last, state)
-
-
-@traceable(name="FollowupAgent")
-def invoke_followup_agent(**state):
-    user_msg = (
-        f"Get details for appointment_id={state['appointment_id']} "
-        f"for patient_id={state['patient_id']}"
-    )
-    result = followup_agent.invoke({"messages": [("user", user_msg)]})
-    last = result["messages"][-1]
-    return _parse_agent_response(last, state)
-
-
-# ==============================================================================
-# RESPONSE PARSER
-# ==============================================================================
-
-import json as _json
-
-
-def _extract_text(content) -> str:
-    """Safely extract a plain-text string from an LLM response content value.
-
-    Handles:
-    * str  — returned as-is.
-    * list — Anthropic-style content blocks: [{'type': 'text', 'text': '...'}, ...]
-             The text of all 'text' blocks is joined.
-    * anything else — falls back to str().
-    """
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for block in content:
-            if isinstance(block, dict):
-                if block.get("type") == "text":
-                    parts.append(block.get("text", ""))
-            elif hasattr(block, "type") and getattr(block, "type", None) == "text":
-                parts.append(getattr(block, "text", ""))
-            else:
-                text_val = str(block)
-                if text_val:
-                    parts.append(text_val)
-        return "\n".join(p for p in parts if p).strip()
-    return str(content)
-
-
-@traceable(name="ResponseAgent")
-def invoke_response_agent(**workflow_facts) -> str:
-    # Directly confirm cancellations cleanly
-    if workflow_facts.get("cancel_status") == "CANCELLED" or (
-        workflow_facts.get("intent") == "CANCEL_APPOINTMENT" and not workflow_facts.get("error")
-    ):
-        appt_id = workflow_facts.get("appointment_id")
-        id_str = f" #{appt_id}" if appt_id else ""
-        return f"Your appointment{id_str} has been successfully cancelled. Please let us know if you need any further assistance."
-
-    # Filter out extra keys not expected by RESPONSE_PROMPT format
-    expected_keys = {"department", "doctor_name", "appointment_id", "booked_datetime", "alt_slots", "error", "problem"}
-    prompt_facts = {k: workflow_facts.get(k) for k in expected_keys}
-
-    response = fast_llm.invoke(
-        RESPONSE_PROMPT.format(**prompt_facts)
-    )
-    return _extract_text(getattr(response, "content", response))
-
-
-def _parse_agent_response(last_message, state: dict) -> dict:
-    """Extract a dict from the agent's last AI message."""
-    content = getattr(last_message, "content", last_message)
-
-    # Unwrap Anthropic content-block lists before any further processing
-    if isinstance(content, list):
-        content = _extract_text(content)
-
-    if isinstance(content, dict):
-        return content
-
-    # Try to parse JSON from the text response
-    text = str(content).strip()
-    # Strip markdown code fences if present
-    if text.startswith("```"):
-        text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
     try:
-        return _json.loads(text)
-    except _json.JSONDecodeError:
-        return {"status": "ERROR", "error": text}
+        return appointment_agent.invoke(message)
+
+    except Exception as exc:
+        print(f"[WARN] AppointmentAgent error: {exc}")
+        return {"status": "ERROR", "error": str(exc)}
+
+
