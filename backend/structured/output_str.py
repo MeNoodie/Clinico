@@ -43,6 +43,6 @@ class RouterOutput(BaseModel):
         default=None,
         description="date/time in ISO-8601 format (e.g. '2026-07-28T10:00:00')"
     )
-
+    status: Literal["SUCCESS", "ERROR"] = "SUCCESS"
 
 
