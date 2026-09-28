@@ -133,10 +133,6 @@ def create_appointment(
         alternative_slots=state.get("alt_slots", []),
     )
 
-
-
-
-
 # =============================================================================
 # NEW: Session / guided workflow endpoints
 # =============================================================================
@@ -249,9 +245,6 @@ def session_reply(
     # ── Determine if the workflow completed ───────────────────────────────────
     terminal_steps = {"completed", "emergency_done"}
     done = final_state.get("current_step") in terminal_steps
-
-    if done:
-        session_store.delete(payload.session_id)  # clean up ownership entry
 
     return SessionReplyResponse(
         done=done,

@@ -5,8 +5,8 @@ from typing import NotRequired, TypedDict
 
 class AgentState(TypedDict):
     
-    query: str
-    raw_query: NotRequired[str | None]   # original input before query rewriting
+    normalized_query: str
+    query: NotRequired[str | None]   # original input before query rewriting
     patient_id: int
     problem: str | None
     department: str | None
@@ -18,10 +18,10 @@ class AgentState(TypedDict):
     safety_reason: NotRequired[str]
 
     appointment_id: NotRequired[int | None]
-    booked_datetime: NotRequired[str | None]
+    appointment_datetime: NotRequired[str | None]
     doctor_name: NotRequired[str | None]
     alt_slots: NotRequired[list[str]]
-    preferred_doctor: NotRequired[str | None]
+    # preferred_doctor: NotRequired[str | None]
     
     cancel_status: NotRequired[str | None]
     appointment_details: NotRequired[dict | None]
