@@ -15,3 +15,4 @@ uvicorn
 pyyaml
 langgraph-checkpoint-sqlite
 logfire[fastapi]
+tzdata
