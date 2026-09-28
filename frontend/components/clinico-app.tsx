@@ -997,9 +997,8 @@ function ConnectedApp({ view, go, auth, profile, logout }: {
 
       setMessages(prev => [...prev, mkMsg('ai', reply.message)])
 
-      // Session is done — clear session ID so next message starts fresh and refresh appointments
+      // Session turn finished — refresh appointments, but preserve sessionId so convo memory stays active until page refresh
       if (reply.done) {
-        setSessionId('')
         loadAppointments()
       }
       // If session has alternative_slots but is NOT done, the backend kept the session alive.
