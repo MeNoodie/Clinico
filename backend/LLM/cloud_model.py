@@ -1,11 +1,3 @@
-"""Central cloud-model factory for Clinico agents.
-
-Usage in an agent::
-
-    from backend.LLM.cloud_model import get_llm
-    response = get_llm("fast").invoke("Hello")
-"""
-
 from functools import lru_cache
 from pathlib import Path
 import os
@@ -13,12 +5,12 @@ import os
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_groq import ChatGroq
-from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint
+# from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint
 import yaml
-
+ 
+load_dotenv()
 
 CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "model.yaml"
-
 
 def _load_model_configs() -> tuple[str, dict[str, dict]]:
     """Read and validate all named model configurations."""
@@ -49,12 +41,7 @@ def _load_model_configs() -> tuple[str, dict[str, dict]]:
 
 @lru_cache(maxsize=None)
 def get_llm(model_name: str | None = None):
-    """Return a named LangChain chat model from ``model.yaml``.
 
-    Omit ``model_name`` to use ``default_model``. Every selected model is
-    cached, so agent nodes reuse its client.
-    """
-    load_dotenv()
     default_model, models = _load_model_configs()
     selected_name = model_name or default_model
     if selected_name not in models:
@@ -75,25 +62,25 @@ def get_llm(model_name: str | None = None):
     common_options = {key: value for key, value in common_options.items() if value is not None}
 
     if config["provider"] == "groq":
-        return ChatGroq(api_key=api_key, **common_options)
+        return ChatGroq(api_key=api_key, request_timeout=25, **common_options)
 
-    if config["provider"] == "huggingface":
-        # HuggingFaceEndpoint uses ``repo_id`` as its model identifier.  Do
-        # not also pass the provider-neutral ``model`` option: the client
-        # rejects requests containing both.
-        huggingface_options = {
-            "temperature": config.get("temperature", 0),
-            "max_new_tokens": config.get("max_tokens"),
-        }
-        huggingface_options = {
-            key: value for key, value in huggingface_options.items() if value is not None
-        }
-        llm = HuggingFaceEndpoint(
-            repo_id = str(config["model"]),
-            huggingfacehub_api_token=api_key,
-            **huggingface_options,
-        )
-        return ChatHuggingFace(llm=llm)
+    # if config["provider"] == "huggingface":
+    #     # HuggingFaceEndpoint uses ``repo_id`` as its model identifier.  Do
+    #     # not also pass the provider-neutral ``model`` option: the client
+    #     # rejects requests containing both.
+    #     huggingface_options = {
+    #         "temperature": config.get("temperature", 0),
+    #         "max_new_tokens": config.get("max_tokens"),
+    #     }
+    #     huggingface_options = {
+    #         key: value for key, value in huggingface_options.items() if value is not None
+    #     }
+    #     llm = HuggingFaceEndpoint(
+    #         repo_id = str(config["model"]),
+    #         huggingfacehub_api_token=api_key,
+    #         **huggingface_options,
+    #     )
+    #     return ChatHuggingFace(llm=llm)
 
     # Google uses a different keyword for its key, but the same YAML shape.
-    return ChatGoogleGenerativeAI(google_api_key=api_key, **common_options)
+    return ChatGoogleGenerativeAI(google_api_key=api_key, request_timeout=15, **common_options)
