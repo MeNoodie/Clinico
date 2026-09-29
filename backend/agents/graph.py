@@ -1,559 +1,586 @@
+"""Clinico Appointment Workflow Graph.
+
+Builds and executes the LangGraph state machine coordinating safety,
+intent coordination, routing, appointment booking, and response generation.
+"""
+
 from __future__ import annotations
 
-import uuid
-
 import sqlite3
+import uuid
+from datetime import datetime, timezone, timedelta
+from pathlib import Path
+from typing import Literal
+
 from langgraph.checkpoint.sqlite import SqliteSaver
-from langgraph.graph import START, END, StateGraph
-from backend.database.db import DATABASE_PATH
+from langgraph.graph import StateGraph, START, END
 
 from backend.agents.state import AgentState
 from backend.agents.agent import (
-    invoke_query_rewriter,
     invoke_safety_agent,
     invoke_coordinator_agent,
-    invoke_coordinator_guided,
     invoke_router_agent,
     invoke_appointment_agent,
-    invoke_cancel_agent,
-    invoke_reschedule_agent,
-    invoke_followup_agent,
     invoke_response_agent,
 )
-from backend.session.store import REQUIRED_FIELDS, FIELD_QUESTIONS
+from backend.session.store import REQUIRED_FIELDS
+
+# Timezone
+IST = timezone(timedelta(hours=5, minutes=30))
+current_date = datetime.now(IST).date().isoformat()
 
 
-EMERGENCY_MESSAGE = (
-    "⚠️ This sounds like a medical emergency. "
-    "Please call the hospital emergency line immediately: 108 (Ambulance) or 112 (Emergency). "
-    "Do NOT wait for an appointment — go to the nearest emergency room now."
-)
+# =========================================================
+# 1. SAFETY NODE & ROUTE
+# =========================================================
 
-
-def _try_parse_datetime(text: str, base_date=None) -> str | None:
-    """Best-effort Python datetime extraction using dateutil.
-
-    Returns an ISO-8601 string with zeroed seconds (e.g. '2026-09-12T09:30:00')
-    or None.  ``base_date`` (a datetime) overrides the default when the user
-    gives only a time like "9:30 AM" after seeing a list of slots on a specific
-    date — without it, dateutil would fall back to today's date.
-    """
-    try:
-        from datetime import datetime as _dt
-        from dateutil.parser import parse as _parse
-        # Use midnight of base_date (or today) so unspecified time components
-        # don't inherit random seconds from the current clock.
-        default_dt = (base_date or _dt.now()).replace(
-            hour=0, minute=0, second=0, microsecond=0
-        )
-        result = _parse(text, fuzzy=True, default=default_dt)
-        # Always zero out seconds/microseconds for clean slot matching.
-        result = result.replace(second=0, microsecond=0)
-        return result.strftime("%Y-%m-%dT%H:%M:%S")
-    except Exception:
-        return None
-
-
-# =============================================================================
-# Nodes
-# =============================================================================
-
-def query_rewriter_node(state: AgentState) -> AgentState:
-    """Normalise raw patient input before the coordinator sees it.
-
-    Translates Hinglish/Hindi, fixes typos, and expands abbreviations while
-    preserving every booking fact (symptom, date, time, appointment ID).
-    The rewritten text replaces ``query`` in state; the original is kept in
-    ``raw_query`` for debugging.
-    """
-    raw = state.get("query") or ""
-    # Only rewrite on the very first turn (no intent yet) OR when a new user
-    # message arrives during a guided session (existing_intent is set).
-    rewritten = invoke_query_rewriter(raw)
-    return {
-        **state,
-        "raw_query": raw,
-        "query":     rewritten,
-    }
-
-
-def coordinator_node(state: AgentState) -> AgentState:
-   
-    existing_intent: str | None = state.get("intent")
-
-    if existing_intent:
-       
-        awaiting = state.get("awaiting_fields") or []
-        user_msg = (state.get("query") or "").strip()
-        
-        # Fast-path 1: appointment_id — extract a bare integer without an LLM call.
-        direct_appt_id: int | None = state.get("appointment_id")
-        if "appointment_id" in awaiting and not direct_appt_id:
-            import re
-            nums = re.findall(r"\b\d+\b", user_msg)
-            if nums:
-                direct_appt_id = int(nums[0])
-
-        # Fast-path 2: appointment_datetime — use dateutil before calling the LLM
-        # so Groq tool-call failures never cause an infinite "What date?" loop.
-        # If we previously showed alt_slots, use the date from the first slot as
-        # the base so "9:30 AM" means the same day the slots were on, not today.
-        direct_datetime: str | None = state.get("appointment_datetime")
-        if "appointment_datetime" in awaiting and not direct_datetime:
-            base_date = None
-            alt_slots = state.get("alt_slots") or []
-            if alt_slots:
-                try:
-                    from datetime import datetime as _slot_dt
-                    base_date = _slot_dt.fromisoformat(alt_slots[0])
-                except Exception:
-                    pass
-            direct_datetime = _try_parse_datetime(user_msg, base_date=base_date)
-
-        result = invoke_coordinator_guided(
-            intent=existing_intent,
-            user_message=user_msg,
-            conversation_history=state.get("conversation_history", []),
-            awaiting_fields=awaiting,
-        )
-
-        # Prefer fast-path values; fall back to LLM extraction.
-        merged_problem    = state.get("problem")    or result.problem
-        merged_datetime   = direct_datetime          or result.appointment_datetime
-        merged_appt_id    = direct_appt_id          or result.appointment_id
-        merged_dept       = state.get("department")  or result.department
-        merged_doctor     = state.get("preferred_doctor") or result.preferred_doctor
-
-        # Recompute which required fields are still missing
-        required = REQUIRED_FIELDS.get(existing_intent, [])
-        current  = {
-            "problem":              merged_problem,
-            "appointment_datetime": merged_datetime,
-            "appointment_id":       merged_appt_id,
-        }
-        new_awaiting = [f for f in required if not current.get(f)]
-
-        # Append user turn to conversation history
-        history = list(state.get("conversation_history") or [])
-        history.append({"role": "user", "content": user_msg})
-
-        return {
-            **state,
-            "problem":              merged_problem,
-            "department":           merged_dept,
-            "appointment_datetime": merged_datetime,
-            "appointment_id":       merged_appt_id,
-            "preferred_doctor":     merged_doctor,
-            "awaiting_fields":      new_awaiting,
-            "conversation_history": history,
-            "current_step":         "coordinator_done",
-        }
-
-    # ── Natural-language mode ─────────────────────────────────────────────────
-    result = invoke_coordinator_agent(state["query"])
-
-    intent   = result.intent
-    required = REQUIRED_FIELDS.get(intent, [])
-
-    # Fast-path: if the LLM failed to extract appointment_datetime (returned None),
-    # try to parse it directly from the query string using dateutil.
-    result_datetime = result.appointment_datetime or _try_parse_datetime(state["query"])
-
-    current  = {
-        "problem":              result.problem,
-        "appointment_datetime": result_datetime,
-        "appointment_id":       state.get("appointment_id"),
-    }
-    awaiting = [f for f in required if not current.get(f)]
+def safety_node(state: AgentState) -> dict:
+    """Classify user query for acute emergencies."""
+    query = state.get("query", "")
+    result = invoke_safety_agent(query)
 
     return {
-        **state,
-        "intent":               result.intent,
-        "problem":              result.problem,
-        "department":           result.department,
-        "appointment_datetime": result_datetime,
-        "awaiting_fields":      awaiting,
-        "current_step":         "coordinator_done",
-    }
-
-
-def waiting_for_user_node(state: AgentState) -> AgentState:
-
-    """Pause point: ask the next clarifying question and save state via checkpointer."""
-    
-    awaiting = state.get("awaiting_fields") or []
-    if awaiting:
-        question = FIELD_QUESTIONS.get(awaiting[0], f"Please provide your {awaiting[0]}.")
-    else:
-        question = "I have everything I need. Processing your request…"
-
-    return {
-        **state,
-        "final_message": question,
-        "current_step":  "waiting_for_user",
-    }
-
-
-def safety_node(state: AgentState) -> AgentState:
-    result = invoke_safety_agent(state["query"])
-    return {
-        **state,
         "safety_status": result.status,
         "safety_reason": result.reason,
-        "current_step":  "safety_done",
+        "current_step": "safety_done",
     }
 
 
-def router_node(state: AgentState) -> AgentState:
-    if state.get("department"):
-        return {**state, "current_step": "router_done"}
+def safety_route(
+    state: AgentState,
+) -> Literal["emergency", "coordinator"]:
+    """Route emergencies to immediate medical triage."""
+    if state.get("safety_status") == "EMERGENCY":
+        return "emergency"
+    return "coordinator"
 
-    result = invoke_router_agent(problem=state.get("problem") or state["query"])
+
+# =========================================================
+# 2. EMERGENCY NODE
+# =========================================================
+
+def emergency_node(state: AgentState) -> dict:
+    """Handle medical emergencies with urgent guidance."""
+    message = (
+        "Your symptoms may require urgent medical attention. "
+        "Please contact local emergency services (108 / 112) or go to "
+        "the nearest emergency department immediately. "
+        "Do not wait for an appointment."
+    )
+
+    history = list(state.get("conversation_history") or [])
+    history.append({
+        "role": "assistant",
+        "content": message,
+    })
+
     return {
-        **state,
-        "department":   result.department,
-        "current_step": "router_done",
+        "intent": "EMERGENCY",
+        "emergency_message": message,
+        "final_message": message,
+        "conversation_history": history,
+        "current_step": "emergency_done",
+        "awaiting_fields": [],
     }
 
 
-def appointment_node(state: AgentState) -> AgentState:
+# =========================================================
+# 3. COORDINATOR NODE & ROUTE
+# =========================================================
+
+def coordinator_node(state: AgentState) -> dict:
+    """Extract intent and core medical problems, normalize patient query."""
+    query = state.get("query", "").strip()
+    history = list(state.get("conversation_history") or [])
+    prev_step = state.get("current_step")
+    is_completed = prev_step in ("completed", "emergency_done", "cancel_done")
+
+    last_appointment_id = state.get("appointment_id")
+    last_doctor_name = state.get("doctor_name")
+    last_department = state.get("department")
+    existing_problem = state.get("problem")
+
+    if is_completed:
+        existing_intent = None
+        existing_datetime = None
+    else:
+        existing_intent = state.get("intent")
+        existing_datetime = state.get("appointment_datetime")
+
+    if existing_intent:
+        context = "\n".join(
+            f"{item['role']}: {item['content']}"
+            for item in history[-6:]
+        )
+        coordinator_query = (
+            f"Previous intent: {existing_intent}\n"
+            f"Existing problem: {existing_problem}\n"
+            f"Existing appointment ID: {last_appointment_id}\n"
+            f"Existing appointment datetime: {existing_datetime}\n"
+            f"Missing fields: {state.get('awaiting_fields', [])}\n"
+            f"Recent conversation:\n{context}\n"
+            f"Current patient message: {query}"
+        )
+    elif is_completed and last_appointment_id:
+        context = "\n".join(
+            f"{item['role']}: {item['content']}"
+            for item in history[-4:]
+        )
+        coordinator_query = (
+            f"Note: An appointment was already completed (ID #{last_appointment_id}, Dr. {last_doctor_name}, Department: {last_department}).\n"
+            f"Recent conversation:\n{context}\n"
+            f"Current patient message: {query}"
+        )
+    else:
+        coordinator_query = query
+
+    result = invoke_coordinator_agent(coordinator_query)
+    normalized_query = result.normalized_query
+
+    if is_completed:
+        intent = result.intent or "OTHER"
+        if intent == "BOOK_APPOINTMENT":
+            problem = result.problem
+            appointment_datetime = None
+            appointment_id = None
+            department = None
+            doctor_name = None
+            alt_slots = []
+        else:
+            problem = result.problem or existing_problem
+            appointment_datetime = None
+            appointment_id = last_appointment_id
+            department = last_department
+            doctor_name = last_doctor_name
+            alt_slots = []
+    else:
+        intent = existing_intent or result.intent or "BOOK_APPOINTMENT"
+        problem = result.problem or existing_problem
+        appointment_datetime = existing_datetime
+        appointment_id = last_appointment_id
+        department = state.get("department")
+        doctor_name = state.get("doctor_name")
+        alt_slots = state.get("alt_slots", [])
+
+    history.append({"role": "user", "content": query})
+
+    required = REQUIRED_FIELDS.get(intent, [])
+    current = {
+        "problem": problem,
+        "appointment_datetime": appointment_datetime,
+        "appointment_id": appointment_id,
+    }
+
+    awaiting = [
+        field for field in required if not current.get(field)
+    ]
+
+    return {
+        "intent": intent,
+        "problem": problem,
+        "normalized_query": normalized_query,
+        "appointment_datetime": appointment_datetime,
+        "appointment_id": appointment_id,
+        "department": department,
+        "doctor_name": doctor_name,
+        "alt_slots": alt_slots,
+        "awaiting_fields": awaiting,
+        "conversation_history": history,
+        "current_step": "coordinator_done",
+        "error": None,
+    }
+
+
+def coordinator_route(
+    state: AgentState,
+) -> Literal["router", "response", "ask_missing"]:
+    """Direct booking requests to routing; general questions to response; otherwise prompt for missing details."""
+    intent = state.get("intent")
+    if intent == "BOOK_APPOINTMENT":
+        return "router"
+    if intent in ("OTHER", "FOLLOWUP_APPOINTMENT"):
+        return "response"
+    return "ask_missing"
+
+
+
+# =========================================================
+# 4. ROUTER NODE & ROUTE
+# =========================================================
+
+def router_node(state: AgentState) -> dict:
+    """Identify medical department and parse preferred appointment date/time."""
+    query = state.get("normalized_query") or state.get("query", "")
+    result = invoke_router_agent(
+        query=query,
+        problem=state.get("problem"),
+        current_date=current_date,
+    )
+
+    if result.status == "ERROR":
+        return {
+            "error": "Unable to determine department or appointment date.",
+            "current_step": "router_error",
+        }
+
+    department = result.department or state.get("department")
+    appointment_datetime = result.appointment_datetime or state.get("appointment_datetime")
+
+    awaiting = []
+    if not (state.get("problem") or query):
+        awaiting.append("problem")
+    if not department:
+        awaiting.append("department")
+    if not appointment_datetime:
+        awaiting.append("appointment_datetime")
+
+    return {
+        "department": department,
+        "appointment_datetime": appointment_datetime,
+        "awaiting_fields": awaiting,
+        "current_step": "router_done",
+        "error": None,
+    }
+
+
+def router_route(
+    state: AgentState,
+) -> Literal["appointment", "ask_missing"]:
+    """Verify all booking prerequisites before calling the booking agent."""
+    if state.get("error"):
+        return "ask_missing"
+
+    if not state.get("department") or not state.get("appointment_datetime"):
+        return "ask_missing"
+
+    return "appointment"
+
+
+# =========================================================
+# 5. ASK MISSING NODE
+# =========================================================
+
+def ask_missing_node(state: AgentState) -> dict:
+    """Prompt the patient for any missing required information."""
+    awaiting = state.get("awaiting_fields") or []
+
+    if state.get("intent") == "BOOK_APPOINTMENT":
+        if not state.get("problem"):
+            question = "What symptoms or medical problem would you like help with?"
+        elif not state.get("department"):
+            question = "Could you clarify the medical department or type of specialist you need?"
+        elif not state.get("appointment_datetime"):
+            question = "What date and time would you prefer for your appointment?"
+        else:
+            question = "Could you provide the missing appointment information?"
+    elif "appointment_id" in awaiting:
+        question = "Please provide your appointment ID."
+    elif "appointment_datetime" in awaiting:
+        question = "What new date and time would you prefer?"
+    else:
+        question = "Could you clarify what you would like to do: book, cancel, reschedule, or check an appointment?"
+
+    history = list(state.get("conversation_history") or [])
+    history.append({
+        "role": "assistant",
+        "content": question,
+    })
+
+    return {
+        "final_message": question,
+        "conversation_history": history,
+        "current_step": "waiting_for_user",
+    }
+
+
+# =========================================================
+# 6. APPOINTMENT NODE & ROUTE
+# =========================================================
+
+def appointment_node(state: AgentState) -> dict:
+    """Execute appointment booking via the dedicated booking tool."""
     try:
         result = invoke_appointment_agent(
             patient_id=state["patient_id"],
             department_name=state["department"],
             appointment_datetime=state["appointment_datetime"],
-            problem=state.get("problem") or state["query"],
+            patient_problem=state.get("problem") or "",
         )
     except Exception as exc:
-        return {**state, "error": str(exc), "current_step": "appointment_done"}
-
-    if result.get("status") == "BOOKED":
         return {
-            **state,
-            "appointment_id":  result["appointment_id"],
-            "booked_datetime": result["appointment_datetime"],
-            "doctor_name":     result.get("doctor_name"),
-            "alt_slots":       [],
-            "current_step":    "appointment_done",
+            "error": str(exc),
+            "current_step": "appointment_error",
         }
-    # Slot unavailable — store alt_slots and clear the chosen datetime so the
-    # patient can pick a new one.  In multi-turn mode we will loop back to ask.
-    return {
-        **state,
-        "alt_slots":             result.get("available_slots", []),
-        "appointment_datetime": None,   # clear the rejected slot
-        "current_step":          "appointment_slots_shown",
-    }
 
-
-def cancel_node(state: AgentState) -> AgentState:
-    try:
-        result = invoke_cancel_agent(
-            appointment_id=state["appointment_id"],
-            patient_id=state["patient_id"],
-        )
-    except Exception as exc:
-        return {**state, "error": str(exc), "current_step": "cancel_done"}
-
-    return {**state, "cancel_status": result["status"], "current_step": "cancel_done"}
-
-
-def reschedule_node(state: AgentState) -> AgentState:
-    try:
-        result = invoke_reschedule_agent(
-            appointment_id=state["appointment_id"],
-            patient_id=state["patient_id"],
-            appointment_datetime=state["appointment_datetime"],
-            problem=state.get("problem"),
-        )
-    except Exception as exc:
-        return {**state, "error": str(exc), "current_step": "reschedule_done"}
-
-    if result.get("status") == "RESCHEDULED":
+    status = result.get("status")
+    if status == "BOOKED":
         return {
-            **state,
-            "appointment_id":  result.get("appointment_id", state.get("appointment_id")),
-            "booked_datetime": result.get("new_datetime", result.get("appointment_datetime")),
-            "alt_slots":       [],
-            "current_step":    "reschedule_done",
+            "appointment_id": result.get("appointment_id"),
+            "booked_datetime": result.get("appointment_datetime"),
+            "doctor_name": result.get("doctor_name"),
+            "alt_slots": [],
+            "current_step": "appointment_done",
+            "error": None,
         }
-    # Slot unavailable — present alternatives and loop back for a new datetime.
-    return {
-        **state,
-        "alt_slots":            result.get("available_slots", []),
-        "appointment_datetime": None,   # clear the rejected slot
-        "current_step":         "reschedule_slots_shown",
-    }
-
-
-def followup_node(state: AgentState) -> AgentState:
-    try:
-        result = invoke_followup_agent(
-            appointment_id=state["appointment_id"],
-            patient_id=state["patient_id"],
-        )
-    except Exception as exc:
-        return {**state, "error": str(exc), "current_step": "followup_done"}
-
-    if result.get("status") == "SUCCESS":
+    elif status == "SUGGEST_SLOT" or result.get("available_slots"):
         return {
-            **state,
-            "appointment_details": result,
-            "department":          result.get("department_name"),
-            "doctor_name":         result.get("doctor_name"),
-            "appointment_id":      result.get("appointment_id"),
-            "booked_datetime":     result.get("appointment_datetime"),
-            "problem":             result.get("patient_problem"),
-            "error":               None,
-            "alt_slots":           [],
-            "current_step":        "followup_done",
+            "alt_slots": result.get("available_slots", []),
+            "requested_datetime": state.get("appointment_datetime"),
+            "appointment_datetime": None,
+            "current_step": "appointment_slots_shown",
+            "error": None,
         }
-    return {
-        **state,
-        "appointment_details": result,
-        "error":               result.get("error", "Unknown error"),
-        "current_step":        "followup_done",
-    }
+    else:
+        return {
+            "error": result.get("error", "Failed to book appointment"),
+            "current_step": "appointment_error",
+        }
 
 
-def emergency_node(state: AgentState) -> AgentState:
-    """Administrative emergency escalation — never diagnose."""
-    return {
-        **state,
-        "emergency_message": EMERGENCY_MESSAGE,
-        "final_message":     EMERGENCY_MESSAGE,
-        "current_step":      "emergency_done",
-    }
-
-
-def appointment_slots_node(state: AgentState) -> AgentState:
-    """Pause point after appointment slot conflict — present alt_slots and re-ask for datetime."""
-    message = invoke_response_agent(
-        department=state.get("department"),
-        doctor_name=state.get("doctor_name"),
-        appointment_id=None,
-        booked_datetime=None,
-        alt_slots=state.get("alt_slots", []),
-        error=None,
-        problem=state.get("problem"),
-    )
-    return {
-        **state,
-        "final_message":   message,
-        "awaiting_fields": ["appointment_datetime"],
-        "current_step":    "waiting_for_user",
-    }
-
-
-def reschedule_slots_node(state: AgentState) -> AgentState:
-    """Pause point after reschedule slot conflict — present alt_slots and re-ask for datetime."""
-    message = invoke_response_agent(
-        department=state.get("department"),
-        doctor_name=state.get("doctor_name"),
-        appointment_id=state.get("appointment_id"),
-        booked_datetime=None,
-        alt_slots=state.get("alt_slots", []),
-        error=None,
-        problem=state.get("problem"),
-    )
-    return {
-        **state,
-        "final_message":   message,
-        "awaiting_fields": ["appointment_datetime"],
-        "current_step":    "waiting_for_user",
-    }
-
-
-def response_node(state: AgentState) -> AgentState:
-    message = invoke_response_agent(
-        department=state.get("department"),
-        doctor_name=state.get("doctor_name"),
-        appointment_id=state.get("appointment_id"),
-        booked_datetime=state.get("booked_datetime"),
-        alt_slots=state.get("alt_slots", []),
-        error=state.get("error"),
-        problem=state.get("problem"),
-    )
-    return {**state, "final_message": message, "current_step": "completed"}
-
-
-# =============================================================================
-# Conditional Routing
-# =============================================================================
-
-def coordinator_complete_route(state: AgentState) -> str:
-    """After coordinator: pause for user input or proceed to safety.
-
-    Single-shot calls (multi_turn=False) always proceed — they never pause.
-    Session-based calls (multi_turn=True) pause when fields are still missing.
-    """
-    if state.get("multi_turn") and state.get("awaiting_fields"):
-        return "waiting_for_user"
-    return "safety"
-
-
-def safety_route(state: AgentState) -> str:
-    if state["safety_status"] == "EMERGENCY":
-        return "emergency"
-    return "router"
-
-
-def intent_route(state: AgentState) -> str:
-    intent = state["intent"]
-    if intent == "BOOK_APPOINTMENT":       return "appointment"
-    if intent == "CANCEL_APPOINTMENT":     return "cancel"
-    if intent == "RESCHEDULE_APPOINTMENT": return "reschedule"
-    if intent == "FOLLOWUP_APPOINTMENT":   return "followup"
-    return "response"
-
-
-# =============================================================================
-# Graph
-# =============================================================================
-
-# Single shared SQLite checkpointer
-_conn = sqlite3.connect(DATABASE_PATH.as_posix(), check_same_thread=False)
-_checkpointer = SqliteSaver(_conn)
-_checkpointer.setup()
-
-
-def appointment_route(state: AgentState) -> str:
-    """After appointment node: if slot conflict in multi-turn, show alt slots and pause."""
-    if state.get("current_step") == "appointment_slots_shown" and state.get("multi_turn"):
+def appointment_route(
+    state: AgentState,
+) -> Literal["appointment_slots", "response"]:
+    """In multi-turn sessions with slot conflicts, show alternative slots and pause."""
+    if state.get("current_step") == "appointment_slots_shown":
         return "appointment_slots"
     return "response"
 
 
-def reschedule_route(state: AgentState) -> str:
-    """After reschedule node: if slot conflict in multi-turn, show alt slots and pause."""
-    if state.get("current_step") == "reschedule_slots_shown" and state.get("multi_turn"):
-        return "reschedule_slots"
-    return "response"
+# =========================================================
+# 7. APPOINTMENT SLOTS NODE
+# =========================================================
+
+def appointment_slots_node(state: AgentState) -> dict:
+    """Present slot suggestions and pause for patient choice."""
+    facts = {
+        "intent": state.get("intent", "BOOK_APPOINTMENT"),
+        "current_step": "appointment_slots_shown",
+        "status": "SUGGEST_SLOT",
+        "problem": state.get("problem"),
+        "department": state.get("department"),
+        "appointment_id": None,
+        "appointment_datetime": state.get("requested_datetime") or state.get("appointment_datetime"),
+        "doctor_name": state.get("doctor_name"),
+        "alt_slots": state.get("alt_slots", []),
+        "cancel_status": None,
+        "appointment_details": None,
+        "emergency_message": None,
+        "awaiting_fields": ["appointment_datetime"],
+        "error": None,
+    }
+    message = invoke_response_agent(**facts)
+
+    history = list(state.get("conversation_history") or [])
+    history.append({
+        "role": "assistant",
+        "content": message,
+    })
+
+    return {
+        "final_message": message,
+        "conversation_history": history,
+        "awaiting_fields": ["appointment_datetime"],
+        "current_step": "waiting_for_user",
+    }
 
 
-def build_graph():
+# =========================================================
+# 8. RESPONSE NODE
+# =========================================================
+
+def response_node(state: AgentState) -> dict:
+    """Synthesize natural patient response for completed bookings, conflicts, or errors."""
+    is_booked = state.get("current_step") == "appointment_done"
+    status = "BOOKED" if is_booked else ("ERROR" if state.get("error") else "SUCCESS")
+
+    facts = {
+        "intent": state.get("intent", "BOOK_APPOINTMENT"),
+        "current_step": state.get("current_step"),
+        "status": status,
+        "problem": state.get("problem"),
+        "department": state.get("department"),
+        "appointment_id": state.get("appointment_id"),
+        "appointment_datetime": state.get("booked_datetime") or state.get("appointment_datetime"),
+        "doctor_name": state.get("doctor_name"),
+        "alt_slots": state.get("alt_slots", []),
+        "cancel_status": state.get("cancel_status"),
+        "appointment_details": state.get("appointment_details"),
+        "emergency_message": state.get("emergency_message"),
+        "awaiting_fields": state.get("awaiting_fields", []),
+        "error": state.get("error"),
+    }
+    message = invoke_response_agent(**facts)
+
+    history = list(state.get("conversation_history") or [])
+    history.append({
+        "role": "assistant",
+        "content": message,
+    })
+
+    next_step = "completed" if is_booked else state.get("current_step", "completed")
+
+    return {
+        "final_message": message,
+        "conversation_history": history,
+        "current_step": next_step,
+    }
+
+
+# =========================================================
+# GRAPH BUILDER
+# =========================================================
+
+def build_graph(checkpointer=None):
+    """Build and compile the Clinico workflow graph."""
     graph = StateGraph(AgentState)
 
-    # Nodes
-    graph.add_node("query_rewriter",     query_rewriter_node)
-    graph.add_node("coordinator",        coordinator_node)
-    graph.add_node("waiting_for_user",   waiting_for_user_node)
-    graph.add_node("safety",             safety_node)
-    graph.add_node("router",             router_node)
-    graph.add_node("appointment",        appointment_node)
-    graph.add_node("appointment_slots",  appointment_slots_node)
-    graph.add_node("cancel",             cancel_node)
-    graph.add_node("reschedule",         reschedule_node)
-    graph.add_node("reschedule_slots",   reschedule_slots_node)
-    graph.add_node("followup",           followup_node)
-    graph.add_node("emergency",          emergency_node)
-    graph.add_node("response",           response_node)
+    # 1. Register Nodes
+    graph.add_node("safety", safety_node)
+    graph.add_node("emergency", emergency_node)
+    graph.add_node("coordinator", coordinator_node)
+    graph.add_node("ask_missing", ask_missing_node)
+    graph.add_node("router", router_node)
+    graph.add_node("appointment", appointment_node)
+    graph.add_node("appointment_slots", appointment_slots_node)
+    graph.add_node("response", response_node)
 
-    # START → query_rewriter → coordinator
-    graph.add_edge(START, "query_rewriter")
-    graph.add_edge("query_rewriter", "coordinator")
+    # 2. Edges: START -> Safety
+    graph.add_edge(START, "safety")
 
-    # coordinator → waiting_for_user (pause) OR → safety (proceed)
-    graph.add_conditional_edges(
-        "coordinator",
-        coordinator_complete_route,
-        {
-            "waiting_for_user": "waiting_for_user",
-            "safety":           "safety",
-        },
-    )
-
-    # waiting_for_user → END (state checkpointed; next call resumes here)
-    graph.add_edge("waiting_for_user", END)
-
-    # appointment_slots → END (state checkpointed; patient picks a new slot)
-    graph.add_edge("appointment_slots", END)
-
-    # safety branches: EMERGENCY → emergency, else → router
+    # 3. Safety routing: Emergency halts, normal continues to coordinator
     graph.add_conditional_edges(
         "safety",
         safety_route,
-        {"router": "router", "emergency": "emergency"},
-    )
-
-    # router branches by intent
-    graph.add_conditional_edges(
-        "router",
-        intent_route,
         {
-            "appointment": "appointment",
-            "cancel":      "cancel",
-            "reschedule":  "reschedule",
-            "followup":    "followup",
-            "response":    "response",
+            "emergency": "emergency",
+            "coordinator": "coordinator",
+        },
+    )
+    graph.add_edge("emergency", END)
+
+    # 4. Coordinator routing: Bookings go to router, other intents/missing details go to ask_missing, general questions to response
+    graph.add_conditional_edges(
+        "coordinator",
+        coordinator_route,
+        {
+            "router": "router",
+            "ask_missing": "ask_missing",
+            "response": "response",
         },
     )
 
-    # appointment → show slots (multi-turn conflict) OR → response (booked/single-shot)
+    # 5. Router routing: All fields ready -> appointment; missing details -> ask_missing
+    graph.add_conditional_edges(
+        "router",
+        router_route,
+        {
+            "appointment": "appointment",
+            "ask_missing": "ask_missing",
+        },
+    )
+
+    # 6. Missing info pauses for user response
+    graph.add_edge("ask_missing", END)
+
+    # 7. Appointment execution routing
     graph.add_conditional_edges(
         "appointment",
         appointment_route,
         {
             "appointment_slots": "appointment_slots",
-            "response":          "response",
+            "response": "response",
         },
     )
-    # reschedule → show slots (multi-turn conflict) OR → response (rescheduled/single-shot)
-    graph.add_conditional_edges(
-        "reschedule",
-        reschedule_route,
-        {
-            "reschedule_slots": "reschedule_slots",
-            "response":         "response",
-        },
-    )
-    graph.add_edge("reschedule_slots", END)
-    graph.add_edge("cancel",     "response")
-    graph.add_edge("followup",   "response")
-    graph.add_edge("emergency",  END)
-    graph.add_edge("response",   END)
 
-    return graph.compile(checkpointer=_checkpointer)
+    # 8. Slot suggestions pause; completed responses finish
+    graph.add_edge("appointment_slots", END)
+    graph.add_edge("response", END)
+
+    if checkpointer is not None:
+        return graph.compile(checkpointer=checkpointer)
+    return graph.compile()
 
 
-booking_graph = build_graph()
+# =========================================================
+# CHECKPOINTER & COMPILED GRAPH INSTANCE
+# =========================================================
+
+DB_PATH = Path(__file__).resolve().parents[2] / "clinico_memory.sqlite"
+
+conn = sqlite3.connect(
+    DB_PATH.as_posix(),
+    check_same_thread=False,
+)
+
+checkpointer = SqliteSaver(conn)
+checkpointer.setup()
+
+graph = build_graph(checkpointer=checkpointer)
 
 
-# =============================================================================
-# Public API helpers
-# =============================================================================
+# =========================================================
+# WORKFLOW EXECUTION HELPERS
+# =========================================================
+
+def get_thread_state(thread_id: str) -> dict | None:
+    """Retrieve saved state for a thread if it exists."""
+    config = {"configurable": {"thread_id": thread_id}}
+    try:
+        snapshot = graph.get_state(config)
+        if snapshot and snapshot.values:
+            return snapshot.values
+    except Exception:
+        pass
+    return None
+
 
 def run_booking_workflow(
-    initial_state: AgentState,
+    initial_state: dict,
     thread_id: str | None = None,
-) -> AgentState:
-    """Invoke the graph from scratch (or resume an existing thread).
-
-    * Single-shot calls (e.g. ``/chat/appointments``): pass
-      ``thread_id=None``; a fresh UUID is created so each call is isolated.
-    * First reply in a guided session: pass the ``session_id`` as
-      ``thread_id``; this creates the checkpoint for that thread.
-    """
-    t_id   = thread_id or str(uuid.uuid4())
+) -> dict:
+    """Execute workflow for a new thread or single-shot invocation."""
+    t_id = thread_id or str(uuid.uuid4())
     config = {"configurable": {"thread_id": t_id}}
-    return booking_graph.invoke(initial_state, config=config)
+    return graph.invoke(initial_state, config=config)
 
 
-def resume_workflow(thread_id: str, query: str) -> AgentState:
-    """Resume a paused guided session by injecting the user's new message.
-
-    LangGraph restores all checkpointed fields and overwrites only ``query``
-    before re-running from the coordinator node.
-    """
+def resume_workflow(thread_id: str, message: str) -> dict:
+    """Resume an existing thread with a new user message."""
     config = {"configurable": {"thread_id": thread_id}}
-    # Pass only the new query — LangGraph merges with the saved checkpoint
-    return booking_graph.invoke({"query": query}, config=config)
+    return graph.invoke({"query": message}, config=config)
 
 
-def get_thread_state(thread_id: str) -> AgentState | None:
-    """Return the latest checkpointed state for *thread_id*, or None."""
-    config   = {"configurable": {"thread_id": thread_id}}
-    snapshot = booking_graph.get_state(config)
-    if snapshot is None or not snapshot.values:
-        return None
-    return snapshot.values  
+def run_workflow(
+    query: str,
+    patient_id: int,
+    thread_id: str,
+) -> dict:
+    """Convenience wrapper returning a simplified summary dict."""
+    config = {"configurable": {"thread_id": thread_id}}
+    input_state = {
+        "query": query,
+        "patient_id": patient_id,
+        "multi_turn": True,
+    }
+
+    try:
+        result = graph.invoke(input_state, config=config)
+        return {
+            "thread_id": thread_id,
+            "intent": result.get("intent"),
+            "status": result.get("current_step"),
+            "message": result.get("final_message"),
+            "awaiting_fields": result.get("awaiting_fields", []),
+            "appointment_id": result.get("appointment_id"),
+            "appointment_details": result.get("appointment_details"),
+            "available_slots": result.get("alt_slots", []),
+            "error": result.get("error"),
+        }
+    except Exception as exc:
+        print(f"[WARN] Workflow error: {exc}")
+        return {
+            "thread_id": thread_id,
+            "status": "ERROR",
+            "message": "Something went wrong. Please try again.",
+            "error": str(exc),
+        }
