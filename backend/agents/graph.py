@@ -39,9 +39,12 @@ def safety_node(state: AgentState) -> dict:
     query = state.get("query", "")
     result = invoke_safety_agent(query)
 
+    is_emergency = result.status == "EMERGENCY"
     return {
         "safety_status": result.status,
         "safety_reason": result.reason,
+        "emergency_message": state.get("emergency_message") if is_emergency else None,
+        "error": None,
         "current_step": "safety_done",
     }
 
@@ -93,42 +96,30 @@ def coordinator_node(state: AgentState) -> dict:
     query = state.get("query", "").strip()
     history = list(state.get("conversation_history") or [])
     prev_step = state.get("current_step")
-    is_completed = prev_step in ("completed", "emergency_done", "cancel_done")
+    is_completed = (prev_step in ("completed", "emergency_done", "cancel_done") and state.get("appointment_id") is not None)
 
     last_appointment_id = state.get("appointment_id")
     last_doctor_name = state.get("doctor_name")
     last_department = state.get("department")
     existing_problem = state.get("problem")
+    existing_datetime = state.get("appointment_datetime")
 
-    if is_completed:
-        existing_intent = None
-        existing_datetime = None
-    else:
-        existing_intent = state.get("intent")
-        existing_datetime = state.get("appointment_datetime")
-
-    if existing_intent:
+    context = ""
+    if history:
         context = "\n".join(
             f"{item['role']}: {item['content']}"
             for item in history[-6:]
         )
+
+    if is_completed and last_appointment_id:
         coordinator_query = (
-            f"Previous intent: {existing_intent}\n"
-            f"Existing problem: {existing_problem}\n"
-            f"Existing appointment ID: {last_appointment_id}\n"
-            f"Existing appointment datetime: {existing_datetime}\n"
-            f"Missing fields: {state.get('awaiting_fields', [])}\n"
-            f"Recent conversation:\n{context}\n"
+            f"Note: An existing appointment was already booked (ID #{last_appointment_id}, Dr. {last_doctor_name}, Department: {last_department}).\n"
+            f"Recent conversation:\n{context}\n\n"
             f"Current patient message: {query}"
         )
-    elif is_completed and last_appointment_id:
-        context = "\n".join(
-            f"{item['role']}: {item['content']}"
-            for item in history[-4:]
-        )
+    elif context:
         coordinator_query = (
-            f"Note: An appointment was already completed (ID #{last_appointment_id}, Dr. {last_doctor_name}, Department: {last_department}).\n"
-            f"Recent conversation:\n{context}\n"
+            f"Recent conversation:\n{context}\n\n"
             f"Current patient message: {query}"
         )
     else:
@@ -136,31 +127,39 @@ def coordinator_node(state: AgentState) -> dict:
 
     result = invoke_coordinator_agent(coordinator_query)
     normalized_query = result.normalized_query
+    new_problem = result.problem
+
+    booked_datetime = state.get("booked_datetime")
 
     if is_completed:
-        intent = result.intent or "OTHER"
-        if intent == "BOOK_APPOINTMENT":
-            problem = result.problem
-            appointment_datetime = None
-            appointment_id = None
-            department = None
-            doctor_name = None
-            alt_slots = []
-        else:
-            problem = result.problem or existing_problem
-            appointment_datetime = None
-            appointment_id = last_appointment_id
-            department = last_department
-            doctor_name = last_doctor_name
-            alt_slots = []
+        # A previous appointment was fully completed. Start a fresh appointment workflow.
+        intent = result.intent or "BOOK_APPOINTMENT"
+        problem = new_problem  # Never inherit problem from an already completed appointment
+        appointment_datetime = None
+        appointment_id = None
+        department = None
+        doctor_name = None
+        alt_slots = []
+        booked_datetime = None
     else:
-        intent = existing_intent or result.intent or "BOOK_APPOINTMENT"
-        problem = result.problem or existing_problem
-        appointment_datetime = existing_datetime
-        appointment_id = last_appointment_id
-        department = state.get("department")
-        doctor_name = state.get("doctor_name")
-        alt_slots = state.get("alt_slots", [])
+        # In-progress workflow
+        intent = result.intent or state.get("intent") or "BOOK_APPOINTMENT"
+        if intent in ("OTHER", "FOLLOWUP_APPOINTMENT"):
+            # Preserve in-progress booking state while answering side-question
+            problem = existing_problem
+            appointment_datetime = existing_datetime
+            appointment_id = last_appointment_id
+            department = state.get("department")
+            doctor_name = state.get("doctor_name")
+            alt_slots = state.get("alt_slots", [])
+        else:
+            # Active booking turn: adopt new problem if provided, else keep existing
+            problem = new_problem or existing_problem
+            appointment_datetime = existing_datetime
+            appointment_id = last_appointment_id
+            department = state.get("department")
+            doctor_name = state.get("doctor_name")
+            alt_slots = state.get("alt_slots", [])
 
     history.append({"role": "user", "content": query})
 
@@ -184,6 +183,7 @@ def coordinator_node(state: AgentState) -> dict:
         "department": department,
         "doctor_name": doctor_name,
         "alt_slots": alt_slots,
+        "booked_datetime": booked_datetime,
         "awaiting_fields": awaiting,
         "conversation_history": history,
         "current_step": "coordinator_done",
@@ -201,6 +201,7 @@ def coordinator_route(
     if intent in ("OTHER", "FOLLOWUP_APPOINTMENT"):
         return "response"
     return "ask_missing"
+
 
 
 
@@ -225,9 +226,15 @@ def router_node(state: AgentState) -> dict:
 
     department = result.department or state.get("department")
     appointment_datetime = result.appointment_datetime or state.get("appointment_datetime")
+    problem = state.get("problem")
+
+    # If the user changed the department (e.g. from Orthopedics to Cardiology), clear the previous knee pain problem
+    previous_dept = state.get("department")
+    if result.department and previous_dept and result.department.strip().lower() != previous_dept.strip().lower():
+        problem = None
 
     awaiting = []
-    if not (state.get("problem") or query):
+    if not problem:
         awaiting.append("problem")
     if not department:
         awaiting.append("department")
@@ -235,6 +242,7 @@ def router_node(state: AgentState) -> dict:
         awaiting.append("appointment_datetime")
 
     return {
+        "problem": problem,
         "department": department,
         "appointment_datetime": appointment_datetime,
         "awaiting_fields": awaiting,
@@ -246,11 +254,11 @@ def router_node(state: AgentState) -> dict:
 def router_route(
     state: AgentState,
 ) -> Literal["appointment", "ask_missing"]:
-    """Verify all booking prerequisites before calling the booking agent."""
+    """Verify all booking prerequisites (problem, department, datetime) before calling the booking agent."""
     if state.get("error"):
         return "ask_missing"
 
-    if not state.get("department") or not state.get("appointment_datetime"):
+    if not state.get("problem") or not state.get("department") or not state.get("appointment_datetime"):
         return "ask_missing"
 
     return "appointment"
@@ -264,9 +272,15 @@ def ask_missing_node(state: AgentState) -> dict:
     """Prompt the patient for any missing required information."""
     awaiting = state.get("awaiting_fields") or []
 
-    if state.get("intent") == "BOOK_APPOINTMENT":
+    if state.get("error"):
+        question = f"{state.get('error')} What date and time would you prefer for your appointment?"
+    elif state.get("intent") == "BOOK_APPOINTMENT":
         if not state.get("problem"):
-            question = "What symptoms or medical problem would you like help with?"
+            dept = state.get("department")
+            if dept:
+                question = f"Could you please describe the health concern or symptoms you'd like to consult the {dept} department for?"
+            else:
+                question = "What symptoms or medical problem would you like help with?"
         elif not state.get("department"):
             question = "Could you clarify the medical department or type of specialist you need?"
         elif not state.get("appointment_datetime"):
@@ -290,6 +304,7 @@ def ask_missing_node(state: AgentState) -> dict:
         "final_message": question,
         "conversation_history": history,
         "current_step": "waiting_for_user",
+        "error": None,
     }
 
 
@@ -356,6 +371,7 @@ def appointment_slots_node(state: AgentState) -> dict:
         "intent": state.get("intent", "BOOK_APPOINTMENT"),
         "current_step": "appointment_slots_shown",
         "status": "SUGGEST_SLOT",
+        "patient_query": state.get("normalized_query") or state.get("query", ""),
         "problem": state.get("problem"),
         "department": state.get("department"),
         "appointment_id": None,
@@ -397,6 +413,7 @@ def response_node(state: AgentState) -> dict:
         "intent": state.get("intent", "BOOK_APPOINTMENT"),
         "current_step": state.get("current_step"),
         "status": status,
+        "patient_query": state.get("normalized_query") or state.get("query", ""),
         "problem": state.get("problem"),
         "department": state.get("department"),
         "appointment_id": state.get("appointment_id"),
@@ -417,7 +434,7 @@ def response_node(state: AgentState) -> dict:
         "content": message,
     })
 
-    next_step = "completed" if is_booked else state.get("current_step", "completed")
+    next_step = "completed" if is_booked else "waiting_for_user"
 
     return {
         "final_message": message,

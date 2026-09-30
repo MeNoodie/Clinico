@@ -124,10 +124,10 @@ def create_appointment(
         "multi_turn":           False,  # single-shot — never pause
     })
     return ChatResponse(
-        message=state["final_message"],
+        message=state.get("final_message", ""),
         department=state.get("department"),
-        intent=state["intent"],
-        safety_status=state["safety_status"],
+        intent=state.get("intent", "BOOK_APPOINTMENT"),
+        safety_status=state.get("safety_status", "NORMAL"),
         appointment_id=state.get("appointment_id"),
         booked_datetime=state.get("booked_datetime"),
         alternative_slots=state.get("alt_slots", []),
