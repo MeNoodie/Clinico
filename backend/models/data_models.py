@@ -115,7 +115,7 @@ class User(Base):
     )
 
     patient: Mapped[Patient | None] = relationship(back_populates="user", uselist=False)
-
+    #document = 
 class Admin(Base):
     __tablename__ = "admins"
 
