@@ -9,6 +9,7 @@ from backend.auth.register import router as register_router
 from backend.api.chat import router as chat_router
 from backend.api.appointments import router as appointments_router
 from backend.api.profile import router as profile_router
+from backend.api.docs_upload import router as documents_router
 from backend.database.db import Base, engine
 from backend.api.dashboard import router as dashboard_router
 import backend.models.data_models  # Register all ORM models with Base metadata.
@@ -36,6 +37,7 @@ app.include_router(login_router)
 app.include_router(chat_router)
 app.include_router(appointments_router)
 app.include_router(profile_router)
+app.include_router(documents_router)
 app.include_router(dashboard_router)
 
 @app.on_event("startup")

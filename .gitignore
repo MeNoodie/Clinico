@@ -7,7 +7,29 @@ wheels/
 *.egg-info
 
 # Virtual environments
-.venv
+.venv/
+venv/
+
+# Local databases and SQLite sidecar files (WAL/SHM)
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+
+# Local patient uploads and generated application data
+/uploads/
+
+# Frontend build and dependency output
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/tsconfig.tsbuildinfo
+
+# Local caches and editor-generated files
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+**/.ipynb_checkpoints/
 /project
 .env
 seed.py
@@ -15,6 +37,5 @@ PROJECT.md
 /project
 test.ipynb
 idea.excalidraw
-clinico.db
 
 tests
