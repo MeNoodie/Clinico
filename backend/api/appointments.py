@@ -1,3 +1,4 @@
+import uuid
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -6,8 +7,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm import joinedload
 
 from backend.auth.dependencies import get_current_patient, get_db
-from backend.models.data_models import Appointment, AppointmentStatus, Patient
-from backend.session.store import get_intent_greeting, store as session_store
+from backend.models.data_models import Appointment, AppointmentStatus, Patient, PatientConversation
+from backend.session.store import get_intent_greeting
 
 router = APIRouter(prefix="/appointments", tags=["Appointments"])
 
@@ -89,11 +90,14 @@ def _start_assistant_action(
         )
 
     intent = _ACTION_INTENTS[action]
-    session_id = session_store.register(
+    session_id = str(uuid.uuid4())
+    db.add(PatientConversation(
         patient_id=patient.id,
+        session_id=session_id,
         intent=intent,
         appointment_id=appointment.id,
-    )
+    ))
+    db.commit()
     return AssistantActionResponse(
         action=action,
         intent=intent,
@@ -159,4 +163,3 @@ def start_followup_assistant(
 ) -> AssistantActionResponse:
     """Open the assistant with this appointment pre-selected for follow-up."""
     return _start_assistant_action("followup", appointment_id, patient, db)
-

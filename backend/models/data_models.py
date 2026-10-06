@@ -194,9 +194,12 @@ class PatientConversation(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
     session_id: Mapped[str] = mapped_column(String(36), unique=True, nullable=False)
+    intent: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    appointment_id: Mapped[int | None] = mapped_column(
+        ForeignKey("appointments.id"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.current_timestamp(), nullable=False
     )
 
     patient: Mapped[Patient] = relationship()
-

@@ -9,6 +9,7 @@ from __future__ import annotations
 import sqlite3
 import re
 import uuid
+import os
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Literal
@@ -923,7 +924,13 @@ def build_graph(checkpointer=None):
 # CHECKPOINTER & COMPILED GRAPH INSTANCE
 # =========================================================
 
-DB_PATH = Path(__file__).resolve().parents[2] / "clinico_memory.sqlite"
+DB_PATH = Path(
+    os.getenv(
+        "LANGGRAPH_CHECKPOINT_DB_PATH",
+        (Path(__file__).resolve().parents[2] / "clinico_memory.sqlite").as_posix(),
+    )
+).expanduser().resolve()
+DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 conn = sqlite3.connect(
     DB_PATH.as_posix(),

@@ -25,10 +25,9 @@ from backend.database.db import SessionLocal
 from backend.models.data_models import Patient, MedicalDocument, PatientConversation
 from sqlalchemy.orm import Session
 from backend.session.store import (
-    INTENT_GREETING,
     REQUIRED_FIELDS,
     get_intent_greeting,
-    store as session_store)
+)
 
 router = APIRouter(prefix="/chat", tags=["Appointments"])
 
@@ -151,16 +150,13 @@ def session_start(
     intent     = payload.intent
     appt_id    = payload.appointment_id
 
-    db.add(PatientConversation(patient_id=patient.id, session_id=session_id))
-    db.commit()
-
-    # Register ownership for auth validation in subsequent replies
-    session_store.register(
+    db.add(PatientConversation(
         patient_id=patient.id,
-        intent=intent,
         session_id=session_id,
+        intent=intent,
         appointment_id=appt_id,
-    )
+    ))
+    db.commit()
 
     # Return the greeting immediately without invoking the LLM
     greeting = get_intent_greeting(intent, appointment_id=appt_id)
@@ -175,10 +171,11 @@ def session_start(
 def session_reply(
     payload: SessionReplyRequest,
     patient: Annotated[Patient, Depends(get_current_patient)],
+    db: Annotated[Session, Depends(get_db)],
 ) -> SessionReplyResponse:
     """Process one turn of a multi-turn guided session.
 
-    How it works (LangGraph MemorySaver)
+    How it works (LangGraph SqliteSaver)
     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     * **First reply** — no checkpoint exists yet.  We build the full initial
       state (intent + patient_id) and call ``run_booking_workflow`` with the
@@ -197,17 +194,20 @@ def session_reply(
       → END, checkpoints state, and returns ``done=False`` with the next
       clarifying question.
     """
-    # ── Auth & session validation ─────────────────────────────────────────────
-    entry = session_store.get(payload.session_id)
-    if entry is None:
+    # Session ownership and initial intent are stored in the application DB,
+    # so a chat can resume after the API process restarts.
+    conversation = (
+        db.query(PatientConversation)
+        .filter(
+            PatientConversation.session_id == payload.session_id,
+            PatientConversation.patient_id == patient.id,
+        )
+        .one_or_none()
+    )
+    if conversation is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Session not found or expired. Please start a new session.",
-        )
-    if entry.patient_id != patient.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Session does not belong to you.",
+            detail="Session not found. Please start a new session.",
         )
 
     # ── Determine if this is the first reply for this thread ──────────────────
@@ -216,8 +216,8 @@ def session_reply(
     if existing is None:
         # First reply — no LangGraph checkpoint yet.
         # Build the complete initial state with intent + awaiting_fields.
-        intent   = entry.intent
-        appt_id  = getattr(entry, "appointment_id", None)
+        intent   = conversation.intent
+        appt_id  = conversation.appointment_id
         required = REQUIRED_FIELDS.get(intent or "", [])
         awaiting = [f for f in required if not (f == "appointment_id" and appt_id)]
 
@@ -253,6 +253,4 @@ def session_reply(
         booked_datetime=final_state.get("booked_datetime"),
         alternative_slots=final_state.get("alt_slots", []),
     )
-
-
 

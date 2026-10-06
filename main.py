@@ -51,6 +51,19 @@ def initialize_database() -> None:
         if "user_id" not in columns:
             with engine.begin() as connection:
                 connection.execute(text("ALTER TABLE patients ADD COLUMN user_id INTEGER"))
+        conversation_columns = {
+            column["name"]
+            for column in inspect(engine).get_columns("patient_conversations")
+        }
+        with engine.begin() as connection:
+            if "intent" not in conversation_columns:
+                connection.execute(text(
+                    "ALTER TABLE patient_conversations ADD COLUMN intent VARCHAR(50)"
+                ))
+            if "appointment_id" not in conversation_columns:
+                connection.execute(text(
+                    "ALTER TABLE patient_conversations ADD COLUMN appointment_id INTEGER"
+                ))
         logfire.info("Database initialized successfully.")
     except Exception as e:
         logfire.error(f"Failed to initialize database: {e}")

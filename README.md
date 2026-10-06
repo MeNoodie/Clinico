@@ -1,127 +1,135 @@
-# AgentCare - AI Healthcare Administration System
+﻿<h1 align="center">Clinico</h1>
 
-AgentCare is a modern, AI-powered healthcare administration system designed to handle patient inquiries, appointment booking, rescheduling, cancellations, and document uploads. 
+<p align="center">
+  <strong>Your care journey, made simpler.</strong><br />
+  Manage appointments and medical reports, and get guided support from an AI assistant.
+</p>
 
-## 🏥 Problem Statement
-Administrative burdens in healthcare are massive. Call centers are overwhelmed, patients wait on hold for simple tasks, and medical staff spend too much time on data entry. AgentCare solves this by providing a conversational AI assistant that directly hooks into the hospital's database, handling common patient needs autonomously with zero wait times.
+<p align="center">
+  <code>Next.js</code> &nbsp; <code>FastAPI</code> &nbsp; <code>LangGraph</code> &nbsp; <code>SQLAlchemy</code>
+</p>
 
-## 🤖 Why Multi-Agent Architecture?
-A single LLM prompt cannot handle the complex safety checks, specialized routing, database interactions, and state tracking required for a hospital system. We use a **Multi-Agent Architecture** (via LangGraph) to divide responsibilities:
-1. **Coordinator Agent**: Interacts with the user, handles small talk, and collects necessary fields.
-2. **Safety Agent**: Checks if the query is a medical emergency and escalates immediately without diagnosing.
-3. **Routing Agent**: Maps the patient's symptoms to the correct hospital department.
-4. **Specialized Action Agents**: Dedicated agents for Booking, Canceling, Rescheduling, and Follow-ups with explicit database tools.
+## What you can do
 
-## 🛠️ Tech Stack
-- **Backend:** FastAPI, LangGraph, LangChain, SQLAlchemy, SQLite
-- **LLMs:** Groq, Gemini, Hugging Face
-- **Observability:** LangSmith (Agent Tracing), Pydantic Logfire (Application Logging)
-- **Deployment:** Docker, Render
+| Feature | Description |
+|---|---|
+| **Manage appointments** | View upcoming, past, and cancelled visits. Start guided booking, cancellation, rescheduling, and follow-up workflows. |
+| **Keep reports together** | Upload PDF and image reports, then preview, download, or delete them from your patient account. |
+| **Get guided AI support** | Chat through a multi-step workflow with intent collection, safety checks, department routing, and appointment actions. |
+| **Manage your account** | Sign up, log in, view your patient dashboard, and edit your profile. |
 
----
+The app includes a **Next.js frontend** and a **FastAPI backend**. Patient routes require JWT authentication, and appointment and document operations are scoped to the signed-in patient.
 
-## 📂 Project Structure
+## Project layout
 
-- `/backend` - The FastAPI backend.
-  - `/agents` - LangChain agents and the LangGraph workflow (`graph.py`).
-  - `/api` - FastAPI routers (`chat.py`, `appointments.py`).
-  - `/auth` - JWT authentication logic and dependencies.
-  - `/database` - SQLAlchemy config and DB session logic.
-  - `/models` - Pydantic data models and SQLAlchemy ORM models.
-  - `/tools` - Tools used by the Action Agents to interact with the database.
-  - `/session` - Session ownership tracking for multi-turn chats.
-- `main.py` - The FastAPI application entrypoint.
-- `Dockerfile` - Backend container build.
-- `render.yaml` - Infrastructure-as-Code for Render deployment.
+- `backend/agents/` — LangGraph workflow and agent logic.
+- `backend/api/` — FastAPI routes for appointments, chat, dashboard, documents, and profile.
+- `backend/auth/` — Signup, login, JWT security, and patient dependencies.
+- `backend/database/` — SQLAlchemy engine and application database configuration.
+- `backend/models/` — SQLAlchemy models.
+- `backend/tools/` — Appointment action tools used by the workflow.
+- `frontend/` — Next.js patient interface.
+- `main.py` — FastAPI application entry point.
+- `Dockerfile`, `render.yaml` — Backend container and Render service configuration.
 
---- 
+## Data storage
 
-## 🔀 Multi-Agent Workflow
+The project currently uses two SQLite databases:
 
-```mermaid
-graph TD
-    START --> Coordinator
-    Coordinator -->|Pause for input| END
-    Coordinator -->|All fields collected| Safety
-    Safety -->|EMERGENCY| Emergency[Emergency Handler] --> END
-    Safety -->|NORMAL| Routing
-    Routing --> Action[Appointment / Cancel / Reschedule / Follow-up]
-    Action --> Response
-    Response --> END
+1. The application database (`clinico.db`) stores users, patients, doctors, departments, appointments, uploaded document metadata, and AI assistant session records. Set `SQLITE_DB_PATH` or `DATABASE_URL` to select its location.
+2. `clinico_memory.sqlite` stores LangGraph workflow checkpoints, including conversation state.
+
+Uploaded report files are stored separately under `uploads/medical_documents/<patient_id>/` by default. `MEDICAL_DOCUMENTS_DIR` can override that location.
+
+Chat session ownership and the initial workflow context are saved in the application database. With both the application database and checkpoint database on persistent storage, an existing session can resume after a backend restart as long as the client still has its session ID.
+
+The Render configuration stores all persistent application data on its `/data` disk: `/data/clinico.db`, `/data/clinico_memory.sqlite`, and `/data/medical_documents`. The Blueprint uses Render's paid `starter` service plan because persistent disks aren't available on free web services. Keep these paths on the disk for workflow checkpoints and uploaded reports to survive deploys and restarts.
+
+## API overview
+
+All patient routes below require `Authorization: Bearer <access_token>`, except signup and login.
+
+### Authentication and profile
+
+- `POST /auth/signup` — create a patient account.
+- `POST /auth/login` — authenticate and receive a JWT.
+- `GET /auth/me` — return the signed-in patient's profile.
+- `GET /users/{user_id}` — get the current user's profile.
+- `PATCH /users/{user_id}` or `PUT /users/{user_id}` — update the current user's name, email, or phone.
+
+### Dashboard and appointments
+
+- `GET /dashboard/stats` — patient document and conversation totals.
+- `GET /appointments/history` — list the signed-in patient's appointments.
+- `POST /appointments/{appointment_id}/cancel` — start cancellation assistance.
+- `POST /appointments/{appointment_id}/reschedule` — start rescheduling assistance.
+- `POST /appointments/{appointment_id}/followup` — start follow-up assistance.
+- `POST /chat/appointments` — submit a single-shot appointment request.
+- `POST /chat/session/start` and `POST /chat/session/reply` — start and continue a guided chat session.
+
+Appointment action endpoints verify ownership and return a session ID and opening message for the chat UI.
+
+### Medical documents
+
+- `POST /documents/upload` — upload a report as multipart form field `file`.
+- `GET /documents/recent` — list the patient's recent reports.
+- `GET /documents/{document_id}/view` — view a report inline.
+- `GET /documents/{document_id}/download` — download a report.
+- `DELETE /documents/{document_id}` — delete the report and its stored file.
+
+Document endpoints only return or modify documents belonging to the authenticated patient.
+
+### Service status
+
+- `GET /` — API welcome message.
+- `GET /api/health` — health check.
+- `GET /docs` — interactive FastAPI documentation while the backend is running.
+
+## Local development
+
+### Requirements
+
+- Python 3.12 or later.
+- Node.js and npm (or pnpm).
+- A Groq API key for the default model. The `fast` model configuration also requires a Gemini API key.
+
+### Backend
+
+Create a `.env` file from the example and set at least `SECRET_KEY` (or `JWT_SECRET_KEY`) and `GROQ_API_KEY`:
+
+```powershell
+Copy-Item .env.example .env
 ```
 
----
+Install dependencies and start the API from the repository root:
 
-## 🗄️ Database Schema
-
-The system uses SQLite (via SQLAlchemy) with the following core tables:
-- **users**: Authentication data (email, password hash).
-- **patients**: Patient profiles linked to users.
-- **doctors**: Hospital staff.
-- **departments**: Hospital departments (Cardiology, General Practice, etc.).
-- **appointments**: Booked slots linking patients to doctors.
-- **medical_documents**: Records of uploaded files.
-
----
-
-## 🔌 APIs
-
-- `POST /auth/signup` - Register a new user/patient.
-- `POST /auth/login` - Authenticate and receive a JWT.
-- `GET /auth/me` - Get current user profile.
-- `POST /chat/session/start` - Start a guided multi-turn chat session.
-- `POST /chat/session/reply` - Send a message to an active chat session.
-- `GET /appointments/history` - Fetch a patient's appointment history.
-- `POST /appointments/{appointment_id}/cancel` - Open a cancellation assistant session.
-- `POST /appointments/{appointment_id}/reschedule` - Open a rescheduling assistant session.
-- `POST /appointments/{appointment_id}/followup` - Open a follow-up assistant session.
-
-The three appointment action endpoints verify that the appointment belongs to
-the authenticated patient and return the assistant `session_id`, first
-assistant `message`, appointment details, and `assistant_reply_url`. After
-opening the chat screen, send subsequent user messages to that reply URL with
-`{ "session_id": "...", "message": "..." }`.
-
----
-
-## 🚀 Installation & Local Run
-
-### Environment Variables
-Copy `.env.example` to `.env` and fill in your keys:
-```bash
-cp .env.example .env
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+uvicorn main:app --reload --env-file .env
 ```
 
-### Backend (Python)
-We recommend using `uv` for lightning-fast dependency management:
-```bash
-uv pip install -r requirements.txt
-uvicorn main:app --reload
+The API is available at `http://localhost:8000`.
+
+### Frontend
+
+In another terminal:
+
+```powershell
+cd frontend
+npm install
+$env:NEXT_PUBLIC_API_URL = "http://localhost:8000"
+npm run dev
 ```
 
-## 🐳 Docker Deployment
+Open `http://localhost:3000`. `NEXT_PUBLIC_API_URL` defaults to `http://localhost:8000` when unset.
 
-To build and run the API in a single container:
-```bash
-docker build -t agentcare .
-docker run -p 8000:8000 --env-file .env agentcare
-```
+## Deployment
 
----
+The repository's `render.yaml` deploys the backend as a Docker web service and mounts a persistent disk at `/data` for the application SQLite database. The frontend is not included in that Render service configuration and needs its own frontend deployment. Set the required model API key and application secrets in the deployment environment. Configure document and LangGraph checkpoint storage on persistent paths if those files need to persist across deploys.
 
-## ☁️ Render Deployment
+## Notes
 
-The project includes a `render.yaml` file for 1-click deployment on Render.
-1. Connect your repository to Render.
-2. Select **Blueprint** deployment.
-3. Render will automatically provision:
-   - A Web Service built from the `Dockerfile`.
-   - A **Persistent Disk** mounted at `/data` for the SQLite database and LangGraph state.
-4. Set your Environment Variables in the Render Dashboard (API keys, Logfire token).
-
----
-
-## 🔮 Future Improvements
-- **Migrate to PostgreSQL**: The SQLAlchemy ORM makes migrating to Postgres trivial for massive scale. Just change the `DATABASE_URL` env var.
-- **Voice Integration**: Add WebRTC or Whisper to allow patients to speak instead of type.
-- **FHIR Integration**: Sync the local database with standard hospital EMR systems using FHIR formats.
+- Database tables are created at backend startup with SQLAlchemy `create_all`; this project does not currently define a schema migration workflow.
+- Local database files, uploaded reports, and generated frontend build files are excluded from Git by `.gitignore`.
