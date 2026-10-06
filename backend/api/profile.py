@@ -3,6 +3,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from backend.database.db import get_db
+from backend.auth.dependencies import get_current_user
 from backend.models.data_models import Patient, User
 
 
@@ -25,8 +26,14 @@ router = APIRouter(prefix="/users", tags=["Users"])
 
 
 @router.get("/{user_id}", response_model=UserProfileResponse)
-def get_user_profile(user_id: int, db: Session = Depends(get_db)):
+def get_user_profile(
+    user_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     """Fetch user profile details by user ID."""
+    if current_user.id != user_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only access your own profile")
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
@@ -35,8 +42,15 @@ def get_user_profile(user_id: int, db: Session = Depends(get_db)):
 
 @router.patch("/{user_id}", response_model=UserProfileResponse)
 @router.put("/{user_id}", response_model=UserProfileResponse)
-def update_user_profile(user_id: int,data: UserProfileUpdate,db: Session = Depends(get_db),):
+def update_user_profile(
+    user_id: int,
+    data: UserProfileUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     """Update name, phone number, and/or email for a user."""
+    if current_user.id != user_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only update your own profile")
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")

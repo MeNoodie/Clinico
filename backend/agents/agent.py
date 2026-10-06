@@ -1,3 +1,4 @@
+from email import message
 import json
 from datetime import datetime, timezone, timedelta
 
@@ -264,6 +265,96 @@ def invoke_appointment_agent(
         return {"status": "ERROR", "error": str(exc)}
 
 
+from langsmith import traceable
+
+
+@traceable(name="cancel_agent")
+def invoke_cancel_agent(
+    appointment_id: int,
+    patient_id: int,
+):
+    message = {
+        "messages": [{
+            "role": "user",
+            "content": (
+                f"appointment_id: {appointment_id}\n"
+                f"patient_id: {patient_id}"
+            ),
+        }]
+    }
+
+    try:
+        result = cancel_agent.invoke(message)
+
+        return result
+
+    except Exception as exc:
+        print(f"[WARN] CancelAgent error: {exc}")
+        return {
+            "status": "ERROR",
+            "error": str(exc),
+        }
+
+
+@traceable(name="reschedule_agent")
+def invoke_reschedule_agent(
+    appointment_id: int,
+    patient_id: int,
+    appointment_datetime: str,
+    reason: str | None = None,
+):
+    message = {
+        "messages": [{
+            "role": "user",
+            "content": (
+                f"appointment_id: {appointment_id}\n"
+                f"patient_id: {patient_id}\n"
+                f"appointment_datetime: {appointment_datetime}\n"
+                f"reason: {reason or 'not provided'}"
+            ),
+        }]
+    }
+
+    try:
+        result = reschedule_agent.invoke(message)
+
+        return result
+
+    except Exception as exc:
+        print(f"[WARN] RescheduleAgent error: {exc}")
+        return {
+            "status": "ERROR",
+            "error": str(exc),
+        }
+
+
+@traceable(name="followup_agent")
+def invoke_followup_agent(
+    appointment_id: int,
+    patient_id: int,
+    user_query: str | None = None,
+):
+    message = {
+        "messages": [{
+            "role": "user",
+            "content": (
+                f"appointment_id: {appointment_id}\n"
+                f"patient_id: {patient_id}\n"
+                f"query: {user_query or ''}"
+            ),
+        }]
+    }
+
+    try:
+        return followup_agent.invoke(message)
+
+    except Exception as exc:
+        print(f"[WARN] FollowupAgent error: {exc}")
+        return {
+            "status": "ERROR",
+            "error": str(exc),
+        }
+
 @traceable(name="response_agent")
 def invoke_response_agent(
     *,
@@ -272,6 +363,9 @@ def invoke_response_agent(
     status=None,
     patient_query=None,
     problem=None,
+    reschedule_reason=None,
+    reason=None,
+    followup_query=None,
     department=None,
     appointment_id=None,
     appointment_datetime=None,
@@ -290,6 +384,9 @@ def invoke_response_agent(
         "status": status or "",
         "patient_query": patient_query or "",
         "problem": problem or "",
+        "reschedule_reason": reschedule_reason or reason or "",
+        "reason": reason or reschedule_reason or "",
+        "followup_query": followup_query or "",
         "department": department or "",
         "appointment_id": appointment_id,
         "appointment_datetime": appointment_datetime,

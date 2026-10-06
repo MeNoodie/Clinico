@@ -14,8 +14,11 @@ class CoordinatorOutput(BaseModel):
     )
 
     problem: Optional[str] = None
+    reschedule_reason: Optional[str] = None
+    followup_query: Optional[str] = None
+    appointment_id: Optional[int] = None
 
-    @field_validator("problem", mode="before")
+    @field_validator("problem", "reschedule_reason", "followup_query", mode="before")
     @classmethod
     def clean_empty_strings(cls, v):
         if v is None:
@@ -44,5 +47,13 @@ class RouterOutput(BaseModel):
         description="date/time in ISO-8601 format (e.g. '2026-07-28T10:00:00')"
     )
     status: Literal["SUCCESS", "ERROR"] = "SUCCESS"
+
+
+
+
+
+
+
+
 
 
