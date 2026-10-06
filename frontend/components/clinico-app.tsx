@@ -1,7 +1,7 @@
 'use client'
 
 import { FormEvent, useEffect, useRef, useState } from 'react'
-import { api } from '@/lib/api'
+import { api, downloadFile, viewFile } from '@/lib/api'
 import {
   Activity,
   ArrowRight,
@@ -17,6 +17,7 @@ import {
   ClipboardList,
   Clock3,
   FileText,
+  Eye,
   Home,
   LayoutDashboard,
   LockKeyhole,
@@ -41,6 +42,7 @@ import {
   Bot,
   RefreshCw,
   AlertCircle,
+  Trash2,
 } from 'lucide-react'
 
 
@@ -59,6 +61,14 @@ type AppointmentData = {
   can_reschedule: boolean
   can_followup: boolean
 }
+type MedicalDocumentData = {
+  id: number
+  filename: string
+  file_type: string
+  uploaded_at: string
+  download_url: string
+}
+type DashboardStats = { document_count: number; conversation_count: number }
 
 // role: 'ai' | 'user' | 'system'
 type ChatMessage = {
@@ -309,7 +319,7 @@ function FeaturesSection() {
     <section id="features" className="marketing-section page-width">
       <div className="section-intro">
         <span className="eyebrow">POWERFUL FEATURES</span>
-        <h2>Healthcare Administration, Powered by AI</h2>
+        <h2>Healthcare Support, Powered by AI</h2>
         <p>Clinico combines intelligent AI agents with healthcare workflows to help patients manage appointments, medical documents, and healthcare interactions from one platform.</p>
       </div>
       <div className="feature-grid">{platformFeatures.map((f) => <Feature key={f.title} {...f} />)}</div>
@@ -322,15 +332,15 @@ function AboutSection() {
     <section id="about" className="about-section page-width">
       <div className="section-intro">
         <span className="eyebrow">ABOUT CLINICO</span>
-        <h2>Making Healthcare Administration Smarter</h2>
-        <p>Clinico is an AI-powered healthcare administration platform designed to simplify how patients interact with healthcare services.</p>
-        <p>From booking appointments to managing follow-ups and medical documents, Clinico uses intelligent workflows to reduce administrative complexity and provide faster patient support.</p>
+        <h2>Making Healthcare Easier to Navigate</h2>
+        <p>Clinico is an AI-powered patient support platform designed to simplify how people access healthcare services.</p>
+        <p>From booking appointments to managing follow-ups and medical documents, Clinico uses intelligent workflows to make patient support faster and simpler.</p>
       </div>
       <div className="problem-solution">
         <article className="about-panel problem">
           <span className="panel-label">PROBLEM</span>
-          <h3>Healthcare administration shouldn&apos;t be complicated.</h3>
-          <p>Patients often wait on calls for simple appointment changes, while healthcare staff spend valuable time managing repetitive administrative tasks.</p>
+          <h3>Getting healthcare support should be simple.</h3>
+          <p>Patients often wait on calls for simple appointment changes and answers to everyday questions.</p>
         </article>
         <article className="about-panel solution">
           <span className="panel-label">SOLUTION</span>
@@ -580,26 +590,34 @@ function AppShell({ children, view, go, profile, logout }: {
 function Dashboard({
   go,
   appointments,
+  stats,
   profile,
   onAction,
   onNewAppt,
 }: {
   go: (v: View) => void
   appointments: AppointmentData[]
+  stats: DashboardStats | null
   profile: ProfileData
   onAction: (appt: AppointmentData, kind: 'cancel' | 'reschedule' | 'followup') => void
   onNewAppt: () => void
 }) {
-  const next = appointments.find(a => (a.status || '').toUpperCase() === 'BOOKED') ?? appointments[0]
-  const bookedCount = appointments.filter(a => (a.status || '').toUpperCase() === 'BOOKED').length
+  const now = Date.now()
+  const upcomingAppointments = appointments.filter(a => {
+    const status = (a.status || '').toUpperCase()
+    const timestamp = new Date(a.datetime).getTime()
+    return status !== 'CANCELLED' && !Number.isNaN(timestamp) && timestamp >= now
+  })
+  const next = upcomingAppointments[0]
+  const bookedCount = upcomingAppointments.length
 
   return (
     <>
       <PageHeading title={`Welcome Back, ${profile.name}! 👋`} copy="Here's an overview of your health journey." />
       <div className="stats-grid">
         <Stat icon={<CalendarDays />} title="Upcoming Appointments" value={String(bookedCount || appointments.length)} tone="blue" />
-        <Stat icon={<FileText />} title="Total Documents" value="5" tone="green" />
-        <Stat icon={<MessageCircle />} title="AI Conversations" value="12" tone="purple" />
+        <Stat icon={<FileText />} title="Total Documents" value={stats ? String(stats.document_count) : '—'} tone="green" />
+        <Stat icon={<MessageCircle />} title="AI Conversations" value={stats ? String(stats.conversation_count) : '—'} tone="purple" />
       </div>
       <h2 className="section-title">Quick Actions</h2>
       <div className="quick-actions">
@@ -628,7 +646,7 @@ function Dashboard({
           <ConnectedAppointmentCard appointment={next} onAction={(kind) => onAction(next, kind)} />
         </>
       )}
-      {!next && appointments.length === 0 && (
+      {!next && (
         <div className="empty-state">
           <CalendarDays size={36} />
           <p>No upcoming appointments. Book one now!</p>
@@ -659,6 +677,7 @@ function ConnectedAppointmentCard({ appointment, onAction }: { appointment: Appo
       <div className="appointment-info">
         <b>{appointment.doctor_name}</b>
         <span>{appointment.department_name}</span>
+        <small className="appointment-id">Appointment ID: {appointment.appointment_id}</small>
         <small>
           {isNaN(date.getTime()) ? '' : `${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · `}
           <span className={`status-badge status-${(appointment.status || '').toLowerCase()}`}>{appointment.status}</span>
@@ -680,12 +699,13 @@ function AppointmentsView({ appointments, loading, onNewAppt, onAction }: {
   onAction: (appt: AppointmentData, kind: 'cancel' | 'reschedule' | 'followup') => void
 }) {
   const [tab, setTab] = useState<'upcoming' | 'past' | 'cancelled'>('upcoming')
+  const now = Date.now()
   const filtered = appointments.filter(a => {
     const status = (a.status || '').toUpperCase()
-    const apptDate = new Date(a.datetime)
-    const isPast = !isNaN(apptDate.getTime()) && apptDate < new Date()
-    if (tab === 'upcoming') return status === 'BOOKED' || (status !== 'CANCELLED' && !isPast)
-    if (tab === 'past') return status === 'COMPLETED' || isPast
+    const timestamp = new Date(a.datetime).getTime()
+    const isPast = !Number.isNaN(timestamp) && timestamp < now
+    if (tab === 'upcoming') return status !== 'CANCELLED' && !Number.isNaN(timestamp) && !isPast
+    if (tab === 'past') return status !== 'CANCELLED' && (status === 'COMPLETED' || isPast)
     return status === 'CANCELLED'
   })
 
@@ -814,17 +834,49 @@ function ClinicoAIView({
 
 // ─── Documents ────────────────────────────────────────────────────────────────
 
-function Documents() {
-  const [uploaded, setUploaded] = useState(false)
+function Documents({ documents, loading, uploading, error, onUpload, onDownload, onView, onDelete }: {
+  documents: MedicalDocumentData[]
+  loading: boolean
+  uploading: boolean
+  error: string
+  onUpload: (file: File) => void
+  onDownload: (document: MedicalDocumentData) => void
+  onView: (document: MedicalDocumentData) => void
+  onDelete: (document: MedicalDocumentData) => void
+}) {
+  const fileInput = useRef<HTMLInputElement>(null)
+  const [deletingId, setDeletingId] = useState<number | null>(null)
   return (
     <>
-      <PageHeading title="Upload Medical Document" copy="Upload and manage your medical reports." />
+      <PageHeading title="Medical Documents" copy="Upload and manage your medical reports." />
       <div className="documents-layout">
-        <div className="upload-zone">
+        <div
+          className="upload-zone"
+          onDragOver={event => event.preventDefault()}
+          onDrop={event => {
+            event.preventDefault()
+            const file = event.dataTransfer.files[0]
+            if (file) onUpload(file)
+          }}
+        >
           <Upload size={34} />
-          <h3>{uploaded ? 'Document uploaded successfully ✓' : 'Drag and drop your file here'}</h3>
-          <button onClick={() => setUploaded(true)}>or click to upload</button>
+          <h3>{uploading ? 'Uploading report…' : 'Drag and drop your report here'}</h3>
+          <input
+            ref={fileInput}
+            type="file"
+            accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png"
+            hidden
+            onChange={event => {
+              const file = event.target.files?.[0]
+              if (file) onUpload(file)
+              event.target.value = ''
+            }}
+          />
+          <button type="button" disabled={uploading} onClick={() => fileInput.current?.click()}>
+            or click to upload
+          </button>
           <small>Supported formats: PDF, JPG, JPEG, PNG (Max 10MB)</small>
+          {error && <small className="document-error">{error}</small>}
         </div>
         <div className="category-panel">
           <h3>Document Categories</h3>
@@ -836,13 +888,71 @@ function Documents() {
           ))}
         </div>
       </div>
+      <section className="recent-documents">
+        <h2>Recent Documents</h2>
+        {loading ? <p className="documents-empty">Loading your reports…</p> : documents.length === 0 ? (
+          <p className="documents-empty">No reports uploaded yet.</p>
+        ) : documents.map(document => (
+          <div className="recent-document" key={document.id}>
+            <span className="recent-document-icon"><FileText size={18} /></span>
+            <div className="recent-document-info">
+              <b>{document.filename}</b>
+              <small>{document.file_type} · {new Date(document.uploaded_at).toLocaleString()}</small>
+            </div>
+            <div className="document-actions">
+              <button type="button" className="secondary-button" onClick={() => onView(document)}>
+                <Eye size={14} /> View
+              </button>
+              <button type="button" className="secondary-button" onClick={() => onDownload(document)}>
+                Download
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
+                disabled={deletingId === document.id}
+                onClick={async () => {
+                  if (!window.confirm(`Delete ${document.filename}? This cannot be undone.`)) return
+                  setDeletingId(document.id)
+                  try { await onDelete(document) } finally { setDeletingId(null) }
+                }}
+              >
+                <Trash2 size={14} /> {deletingId === document.id ? 'Deleting…' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        ))}
+      </section>
     </>
   )
 }
 
 // ─── Profile ──────────────────────────────────────────────────────────────────
 
-function Profile({ profile }: { profile: ProfileData }) {
+function Profile({ profile, onSave }: {
+  profile: ProfileData
+  onSave: (updates: { name: string; email: string; phone: string }) => Promise<void>
+}) {
+  const [editing, setEditing] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const [name, setName] = useState(profile.name)
+  const [email, setEmail] = useState(profile.email)
+  const [phone, setPhone] = useState(profile.phone)
+
+  async function saveProfile(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setSaving(true)
+    setError('')
+    try {
+      await onSave({ name, email, phone })
+      setEditing(false)
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : 'Could not save your profile')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   return (
     <>
       <PageHeading title="My Profile" copy="Manage your personal health information." />
@@ -852,12 +962,24 @@ function Profile({ profile }: { profile: ProfileData }) {
           <h2>{profile.name}</h2>
           <p>Patient</p>
         </div>
-        <button className="secondary-button">Edit Profile</button>
-        <div className="profile-fields">
-          <Field icon={<User />} label="Full Name" placeholder={profile.name} />
-          <Field icon={<Mail />} label="Email Address" placeholder={profile.email} />
-          <Field icon={<Phone />} label="Phone Number" placeholder={profile.phone || '+91 XXXXX XXXXX'} />
-        </div>
+        {!editing ? (
+          <button type="button" className="secondary-button" onClick={() => setEditing(true)}>Edit Profile</button>
+        ) : (
+          <div className="profile-edit-actions">
+            <button type="button" className="secondary-button" onClick={() => {
+              setName(profile.name); setEmail(profile.email); setPhone(profile.phone); setError(''); setEditing(false)
+            }}>Cancel</button>
+            <button type="submit" form="profile-edit-form" className="primary-button" disabled={saving}>
+              {saving ? 'Saving…' : 'Save Changes'}
+            </button>
+          </div>
+        )}
+        <form id="profile-edit-form" className="profile-fields" onSubmit={saveProfile}>
+          <label className="field"><span><User /><b>Full Name</b></span><div><input value={name} onChange={event => setName(event.target.value)} required minLength={2} maxLength={120} disabled={!editing} /></div></label>
+          <label className="field"><span><Mail /><b>Email Address</b></span><div><input type="email" value={email} onChange={event => setEmail(event.target.value)} required minLength={3} maxLength={255} disabled={!editing} /></div></label>
+          <label className="field"><span><Phone /><b>Phone Number</b></span><div><input type="tel" value={phone} onChange={event => setPhone(event.target.value)} minLength={5} maxLength={20} disabled={!editing} /></div></label>
+          {error && <p className="form-error">{error}</p>}
+        </form>
       </div>
     </>
   )
@@ -880,15 +1002,21 @@ function SettingsPage() {
 
 // ─── Connected app (real backend) ─────────────────────────────────────────────
 
-function ConnectedApp({ view, go, auth, profile, logout }: {
+function ConnectedApp({ view, go, auth, profile, logout, onProfileUpdate }: {
   view: View
   go: (view: View) => void
   auth: Auth
   profile: ProfileData
   logout: () => void
+  onProfileUpdate: (updates: Partial<ProfileData>) => void
 }) {
   const [appointments, setAppointments] = useState<AppointmentData[]>([])
+  const [documents, setDocuments] = useState<MedicalDocumentData[]>([])
+  const [dashboardStats, setDashboardStats] = useState<DashboardStats | null>(null)
   const [apptLoading, setApptLoading] = useState(false)
+  const [documentsLoading, setDocumentsLoading] = useState(false)
+  const [documentUploading, setDocumentUploading] = useState(false)
+  const [documentError, setDocumentError] = useState('')
   const [globalError, setGlobalError] = useState('')
 
   // Chat state
@@ -910,9 +1038,84 @@ function ConnectedApp({ view, go, auth, profile, logout }: {
     }
   }
 
+  async function loadDocuments() {
+    setDocumentsLoading(true)
+    try {
+      const data = await api<{ documents: MedicalDocumentData[] }>('/documents/recent', auth.access_token)
+      setDocuments(data.documents)
+    } catch (error) {
+      setDocumentError(error instanceof Error ? error.message : 'Failed to load documents')
+    } finally {
+      setDocumentsLoading(false)
+    }
+  }
+
+  async function loadDashboardStats() {
+    try {
+      const data = await api<DashboardStats>('/dashboard/stats', auth.access_token)
+      setDashboardStats(data)
+    } catch (error) {
+      setGlobalError(error instanceof Error ? error.message : 'Failed to load dashboard stats')
+    }
+  }
+
   useEffect(() => {
     if (view === 'appointments' || view === 'dashboard') loadAppointments()
+    if (view === 'dashboard') loadDashboardStats()
+    if (view === 'documents') loadDocuments()
   }, [view])
+
+  async function uploadDocument(file: File) {
+    setDocumentError('')
+    setDocumentUploading(true)
+    try {
+      const form = new FormData()
+      form.append('file', file)
+      await api('/documents/upload', auth.access_token, { method: 'POST', body: form })
+      await loadDocuments()
+    } catch (error) {
+      setDocumentError(error instanceof Error ? error.message : 'Failed to upload document')
+    } finally {
+      setDocumentUploading(false)
+    }
+  }
+
+  async function downloadDocument(document: MedicalDocumentData) {
+    setDocumentError('')
+    try {
+      await downloadFile(document.download_url, auth.access_token, document.filename)
+    } catch (error) {
+      setDocumentError(error instanceof Error ? error.message : 'Failed to download document')
+    }
+  }
+
+  async function viewDocument(document: MedicalDocumentData) {
+    setDocumentError('')
+    try {
+      await viewFile(`/documents/${document.id}/view`, auth.access_token)
+    } catch (error) {
+      setDocumentError(error instanceof Error ? error.message : 'Failed to view document')
+    }
+  }
+
+  async function deleteDocument(document: MedicalDocumentData) {
+    setDocumentError('')
+    try {
+      await api(`/documents/${document.id}`, auth.access_token, { method: 'DELETE' })
+      await loadDocuments()
+    } catch (error) {
+      setDocumentError(error instanceof Error ? error.message : 'Failed to delete document')
+    }
+  }
+
+  async function saveProfile(updates: { name: string; email: string; phone: string }) {
+    const updated = await api<{ id: number; name: string; email: string; phone: string }>(
+      `/users/${profile.user_id}`,
+      auth.access_token,
+      { method: 'PATCH', body: JSON.stringify(updates) },
+    )
+    onProfileUpdate({ name: updated.name, email: updated.email, phone: updated.phone })
+  }
 
   // ── start guided chat session ─────────────────────────────────────────────
   async function startChatSession(intent?: string, appointmentId?: number | null) {
@@ -1032,6 +1235,7 @@ function ConnectedApp({ view, go, auth, profile, logout }: {
         <Dashboard
           go={go}
           appointments={appointments}
+          stats={dashboardStats}
           profile={profile}
           onAction={appointmentAction}
           onNewAppt={() => startChatSession('BOOK_APPOINTMENT')}
@@ -1059,8 +1263,19 @@ function ConnectedApp({ view, go, auth, profile, logout }: {
         />
       )}
 
-      {view === 'profile' && <Profile profile={profile} />}
-      {view === 'documents' && <Documents />}
+      {view === 'profile' && <Profile profile={profile} onSave={saveProfile} />}
+      {view === 'documents' && (
+        <Documents
+          documents={documents}
+          loading={documentsLoading}
+          uploading={documentUploading}
+          error={documentError}
+          onUpload={uploadDocument}
+          onDownload={downloadDocument}
+          onView={viewDocument}
+          onDelete={deleteDocument}
+        />
+      )}
       {view === 'settings' && <SettingsPage />}
     </AppShell>
   )
@@ -1096,9 +1311,13 @@ export default function ClinicoApp() {
     setView('home')
   }
 
+  function updateProfile(updates: Partial<ProfileData>) {
+    setProfile(current => current ? { ...current, ...updates } : current)
+  }
+
   if (view === 'home') return <Landing go={setView} />
   if (view === 'signup' || view === 'login') return <ConnectedAuth mode={view} go={setView} signedIn={signedIn} />
   return auth && profile
-    ? <ConnectedApp view={view} go={setView} auth={auth} profile={profile} logout={logout} />
+    ? <ConnectedApp view={view} go={setView} auth={auth} profile={profile} logout={logout} onProfileUpdate={updateProfile} />
     : <Landing go={setView} />
 }

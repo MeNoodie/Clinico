@@ -303,6 +303,18 @@ a { text-decoration: none; }
 .category:hover { background: #f7faff; border-color: #c5d5ef; }
 .category span { display: grid; place-items: center; color: #253b61; }
 .category svg { width: 15px; }
+.upload-zone button:disabled { opacity: .6; cursor: wait; }
+.document-error { color: #c94040 !important; max-width: 90%; }
+.recent-documents { margin-top: 22px; border: 1px solid #e2e9f3; border-radius: 10px; background: #fff; padding: 16px; }
+.recent-documents h2 { margin: 0 0 12px; font-size: 14px; }
+.documents-empty { color: #66748b; font-size: 12px; }
+.recent-document { display: flex; align-items: center; gap: 12px; padding: 11px 0; border-top: 1px solid #edf1f7; }
+.recent-document-icon { display: grid; place-items: center; color: #245bdc; background: #eff5ff; border-radius: 7px; width: 36px; height: 36px; flex: 0 0 36px; }
+.recent-document-info { display: grid; gap: 4px; min-width: 0; flex: 1; }
+.recent-document-info b { font-size: 12px; overflow-wrap: anywhere; }
+.recent-document-info small { color: #66748b; font-size: 10px; }
+.document-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.recent-document .secondary-button { padding: 7px 11px; font-size: 11px; }
 
 /* ── AI Layout ──────────────────────────────────────────────────────────────── */
 .ai-layout { display: grid; grid-template-columns: 1fr 240px; gap: 18px; align-items: start; }
@@ -514,6 +526,7 @@ a { text-decoration: none; }
 .profile-name h2 { font-size: 18px; margin: 0 0 4px; }
 .profile-name p { color: #6b7890; margin: 0; font-size: 12px; }
 .profile-fields { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; margin-top: 18px; }
+.profile-edit-actions { display: flex; gap: 8px; justify-content: flex-end; }
 
 /* ── Animations ─────────────────────────────────────────────────────────────── */
 @keyframes rise-in { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: translateY(0); } }
