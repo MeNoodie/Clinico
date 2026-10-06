@@ -1,12 +1,10 @@
 """Authenticated API for the Clinico appointment workflow.
-
 Endpoints
 ---------
 POST /chat/appointments   — single-shot, JWT-auth, natural-language
 POST /chat/session/start  — begin a guided multi-turn session (button click)
 POST /chat/session/reply  — send the next message in a guided session
 """
-
 from __future__ import annotations
 
 import uuid
@@ -20,21 +18,19 @@ from pydantic import BaseModel, Field
 from backend.agents.graph import (
     get_thread_state,
     resume_workflow,
-    run_booking_workflow,
-)
-from backend.auth.dependencies import get_current_patient
+    run_booking_workflow)
+
+from backend.auth.dependencies import get_current_patient, get_db
 from backend.database.db import SessionLocal
-from backend.models.data_models import Patient, MedicalDocument
+from backend.models.data_models import Patient, MedicalDocument, PatientConversation
+from sqlalchemy.orm import Session
 from backend.session.store import (
     INTENT_GREETING,
     REQUIRED_FIELDS,
     get_intent_greeting,
-    store as session_store,
-)
-
+    store as session_store)
 
 router = APIRouter(prefix="/chat", tags=["Appointments"])
-
 
 # =============================================================================
 # Shared Pydantic models
@@ -46,9 +42,7 @@ class ChatRequest(BaseModel):
     department: str | None = Field(default=None, max_length=100)
     appointment_datetime: str | None = Field(
         default=None,
-        description="Preferred local ISO-8601 datetime, e.g. 2026-07-27T10:30:00",
-    )
-
+        description="Preferred local ISO-8601 datetime, e.g. 2026-07-27T10:30:00")
 
 class ChatResponse(BaseModel):
     message: str
@@ -97,7 +91,6 @@ class SessionReplyResponse(BaseModel):
 
     done: bool
     message: str
-    # Populated only when done=True
     department: str | None = None
     intent: str | None = None
     safety_status: str | None = None
@@ -145,6 +138,7 @@ def create_appointment(
 def session_start(
     payload: SessionStartRequest,
     patient: Annotated[Patient, Depends(get_current_patient)],
+    db: Annotated[Session, Depends(get_db)],
 ) -> SessionStartResponse:
     """Create a new guided session for the authenticated patient.
 
@@ -156,6 +150,9 @@ def session_start(
     session_id = str(uuid.uuid4())
     intent     = payload.intent
     appt_id    = payload.appointment_id
+
+    db.add(PatientConversation(patient_id=patient.id, session_id=session_id))
+    db.commit()
 
     # Register ownership for auth validation in subsequent replies
     session_store.register(
@@ -256,3 +253,6 @@ def session_reply(
         booked_datetime=final_state.get("booked_datetime"),
         alternative_slots=final_state.get("alt_slots", []),
     )
+
+
+

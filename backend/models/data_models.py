@@ -116,24 +116,6 @@ class User(Base):
 
     patient: Mapped[Patient | None] = relationship(back_populates="user", uselist=False)
     #document = 
-class Admin(Base):
-    __tablename__ = "admins"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-
-    admin_id: Mapped[str] = mapped_column(
-        String(50),
-        unique=True,
-        nullable=False,
-        index=True
-    )
-
-    password_hash: Mapped[str] = mapped_column(
-        String(255),
-        nullable=False
-    )
-    
-
 class Appointment(Base):
     __tablename__ = "appointments"
 
@@ -202,4 +184,19 @@ class MedicalDocument(Base):
 
     patient: Mapped[Patient] = relationship()
     appointment: Mapped[Appointment | None] = relationship()
+
+
+class PatientConversation(Base):
+    """A persisted chat session started by a patient."""
+
+    __tablename__ = "patient_conversations"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    session_id: Mapped[str] = mapped_column(String(36), unique=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp(), nullable=False
+    )
+
+    patient: Mapped[Patient] = relationship()
 
