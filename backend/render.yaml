@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: agentcare-service
+    env: docker
+    plan: starter
+    disk:
+      name: agentcare-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: SQLITE_DB_PATH
+        value: /data/clinico.db
+      - key: LANGGRAPH_CHECKPOINT_DB_PATH
+        value: /data/clinico_memory.sqlite
+      - key: MEDICAL_DOCUMENTS_DIR
+        value: /data/medical_documents
+      - key: PORT
+        value: 8000
+      - key: SECRET_KEY
+        generateValue: true
+      - key: LOGFIRE_TOKEN
+        sync: false
+      - key: LANGCHAIN_TRACING_V2
+        value: "true"
+      - key: LANGCHAIN_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
