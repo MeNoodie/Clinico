@@ -1,4 +1,4 @@
-const baseUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
+const baseUrl = (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000').replace(/\/$/, '')
 
 /** Extract a human-readable error message from a FastAPI error body. */
 function extractErrorMessage(body: unknown): string {

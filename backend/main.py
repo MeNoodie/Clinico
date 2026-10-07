@@ -14,13 +14,12 @@ from backend.database.db import Base, engine
 from backend.api.dashboard import router as dashboard_router
 import backend.models.data_models  # Register all ORM models with Base metadata.
 
-# Initialize Logfire
-logfire.configure()
-
 app = FastAPI(title="Clinico - Your AI receptionist")
 
-# Instrument FastAPI with Logfire
-logfire.instrument_fastapi(app)
+# Enable Logfire only when a production token is configured.
+if os.getenv("LOGFIRE_TOKEN"):
+    logfire.configure()
+    logfire.instrument_fastapi(app)
 
 app.add_middleware(
     CORSMiddleware,
