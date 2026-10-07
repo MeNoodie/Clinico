@@ -24,6 +24,7 @@ COPY LLM/ ./backend/LLM/
 COPY models/ ./backend/models/
 COPY prompts/ ./backend/prompts/
 COPY session/ ./backend/session/
+COPY seed.py ./backend/seed.py
 COPY structured/ ./backend/structured/
 COPY tools/ ./backend/tools/
 

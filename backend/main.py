@@ -12,6 +12,7 @@ from backend.api.profile import router as profile_router
 from backend.api.docs_upload import router as documents_router
 from backend.database.db import Base, engine
 from backend.api.dashboard import router as dashboard_router
+from backend.seed import seed_reference_data
 import backend.models.data_models  # Register all ORM models with Base metadata.
 
 app = FastAPI(title="Clinico - Your AI receptionist")
@@ -63,6 +64,7 @@ def initialize_database() -> None:
                 connection.execute(text(
                     "ALTER TABLE patient_conversations ADD COLUMN appointment_id INTEGER"
                 ))
+        seed_reference_data()
         logfire.info("Database initialized successfully.")
     except Exception as e:
         logfire.error(f"Failed to initialize database: {e}")

@@ -33,6 +33,7 @@ frontend/tsconfig.tsbuildinfo
 /project
 .env
 seed.py
+!backend/seed.py
 PROJECT.md
 /project
 test.ipynb
