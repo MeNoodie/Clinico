@@ -19,6 +19,7 @@ COPY main.py .
 # Ensure the persistent data directory exists
 RUN mkdir -p /data
 ENV SQLITE_DB_PATH=/data/clinico.db
+ENV LANGGRAPH_CHECKPOINT_DB_PATH=/data/clinico_memory.sqlite
 
 # Expose port and run Uvicorn
 EXPOSE 8000
