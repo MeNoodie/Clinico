@@ -27,10 +27,20 @@ export async function api<T>(path: string, token?: string, options: RequestInit 
   const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData
   if (!isFormData && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
 
-  const response = await fetch(`${baseUrl}${path}`, {
-    ...options,
-    headers,
-  })
+  let response: Response
+  try {
+    response = await fetch(`${baseUrl}${path}`, {
+      ...options,
+      headers,
+    })
+  } catch (err: unknown) {
+    if (err instanceof TypeError && (err.message.includes('fetch') || err.message.includes('Failed') || err.message.includes('NetworkError'))) {
+      throw new Error(
+        `Cannot connect to backend API at "${baseUrl}". Verify that NEXT_PUBLIC_API_URL is set in your deployment environment and the backend service is awake.`
+      )
+    }
+    throw err
+  }
   const body = await response.json().catch(() => ({}))
   if (!response.ok) throw new Error(extractErrorMessage(body))
   return body as T

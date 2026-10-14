@@ -49,9 +49,11 @@ def get_llm(model_name: str | None = None):
         raise ValueError(f"Unknown model '{selected_name}'. Choose one of: {options}")
     config = models[selected_name]
     api_key = os.getenv(config["api_key_env"])
+    if not api_key and config.get("provider") == "google":
+        api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     if not api_key:
         raise RuntimeError(
-            f"Set {config['api_key_env']} in .env before starting the agent."
+            f"Set {config['api_key_env']} in environment before starting the agent."
         )
 
     common_options = {

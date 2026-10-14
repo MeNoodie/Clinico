@@ -28,11 +28,12 @@ COPY seed.py ./backend/seed.py
 COPY structured/ ./backend/structured/
 COPY tools/ ./backend/tools/
 
-# Ensure the persistent data directory exists
+# Ensure backend is recognized as a package and persistent directories exist
+RUN touch ./backend/__init__.py
 RUN mkdir -p /data
 ENV SQLITE_DB_PATH=/data/clinico.db
 ENV LANGGRAPH_CHECKPOINT_DB_PATH=/data/clinico_memory.sqlite
 
-# Expose port and run Uvicorn
+# Expose port and run Uvicorn dynamically with $PORT (Render standard)
 EXPOSE 8000
-CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
