@@ -272,7 +272,7 @@ from langsmith import traceable
 def invoke_cancel_agent(
     appointment_id: int,
     patient_id: int,
-):
+) -> dict:
     message = {
         "messages": [{
             "role": "user",
@@ -284,9 +284,38 @@ def invoke_cancel_agent(
     }
 
     try:
-        result = cancel_agent.invoke(message)
+        agent_out = cancel_agent.invoke(message)
 
-        return result
+        if isinstance(agent_out, dict):
+            messages = agent_out.get("messages", [])
+            # Prefer the cancellation tool result: it reflects the committed
+            # database change even if the agent's final text is malformed.
+            for msg in reversed(messages):
+                tool_name = getattr(msg, "name", None)
+                if tool_name and tool_name != "process_cancel_tool":
+                    continue
+                tool_output = getattr(msg, "artifact", None)
+                if tool_output is None:
+                    tool_output = getattr(msg, "content", None)
+                parsed = _parse_agent_json(tool_output)
+                if parsed.get("status") == "CANCELLED":
+                    return parsed
+
+            # Fall back to the agent's final JSON response.
+            if messages:
+                last_msg = messages[-1]
+                content = getattr(last_msg, "content", last_msg)
+                parsed = _parse_agent_json(content)
+                if parsed.get("status") in {"CANCELLED", "ERROR"}:
+                    return parsed
+
+            if agent_out.get("status") in {"CANCELLED", "ERROR"}:
+                return agent_out
+
+        return {
+            "status": "ERROR",
+            "error": "Could not parse cancellation result.",
+        }
 
     except Exception as exc:
         print(f"[WARN] CancelAgent error: {exc}")
@@ -302,7 +331,7 @@ def invoke_reschedule_agent(
     patient_id: int,
     appointment_datetime: str,
     reason: str | None = None,
-):
+) -> dict:
     message = {
         "messages": [{
             "role": "user",
@@ -316,9 +345,38 @@ def invoke_reschedule_agent(
     }
 
     try:
-        result = reschedule_agent.invoke(message)
+        agent_out = reschedule_agent.invoke(message)
 
-        return result
+        if isinstance(agent_out, dict):
+            messages = agent_out.get("messages", [])
+            # Prefer the tool result because it contains the committed
+            # reschedule or the actual availability suggestions.
+            for msg in reversed(messages):
+                tool_name = getattr(msg, "name", None)
+                if tool_name and tool_name != "process_reschedule_tool":
+                    continue
+                tool_output = getattr(msg, "artifact", None)
+                if tool_output is None:
+                    tool_output = getattr(msg, "content", None)
+                parsed = _parse_agent_json(tool_output)
+                if parsed.get("status") in {"RESCHEDULED", "SUGGEST_SLOT", "ERROR"}:
+                    return parsed
+
+            # Fall back to the agent's final JSON response.
+            if messages:
+                last_msg = messages[-1]
+                content = getattr(last_msg, "content", last_msg)
+                parsed = _parse_agent_json(content)
+                if parsed.get("status") in {"RESCHEDULED", "SUGGEST_SLOT", "ERROR"}:
+                    return parsed
+
+            if agent_out.get("status") in {"RESCHEDULED", "SUGGEST_SLOT", "ERROR"}:
+                return agent_out
+
+        return {
+            "status": "ERROR",
+            "error": "Could not parse rescheduling result.",
+        }
 
     except Exception as exc:
         print(f"[WARN] RescheduleAgent error: {exc}")

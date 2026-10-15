@@ -191,11 +191,12 @@ Success:
 {{
     "status": "RESCHEDULED",
     "appointment_id": <int>,
-    "old_datetime": "<ISO-8601>",
-    "new_datetime": "<ISO-8601>"
+    "appointment_datetime": "<ISO-8601>",
+    "doctor_id": <int>,
+    "doctor_name": "<string>"
 }}
 
-Failure (slot occupied):
+Failure (no department doctor is available at the requested time):
 {{
     "status": "SUGGEST_SLOT",
     "available_slots": ["<iso-8601 slot 1>", "<iso-8601 slot 2>"]

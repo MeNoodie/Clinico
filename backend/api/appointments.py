@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -83,6 +84,14 @@ def _start_assistant_action(
                 f"This appointment is {appointment.status.value}."
             ),
         )
+    if (
+        action in {"cancel", "reschedule"}
+        and appointment.appointment_datetime < datetime.now()
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Past appointments can only be used to schedule a follow-up.",
+        )
     if action == "followup" and appointment.status == AppointmentStatus.CANCELLED:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -121,6 +130,7 @@ def get_appointment_history(
     )
     
     results = []
+    now = datetime.now()
     for appt in appointments:
         item = _appointment_context(appt)
         item["actions"] = {
@@ -128,8 +138,9 @@ def get_appointment_history(
             "reschedule": f"/appointments/{appt.id}/reschedule",
             "followup": f"/appointments/{appt.id}/followup",
         }
-        item["can_cancel"] = appt.status == AppointmentStatus.BOOKED
-        item["can_reschedule"] = appt.status == AppointmentStatus.BOOKED
+        is_future = appt.appointment_datetime >= now
+        item["can_cancel"] = appt.status == AppointmentStatus.BOOKED and is_future
+        item["can_reschedule"] = appt.status == AppointmentStatus.BOOKED and is_future
         item["can_followup"] = appt.status != AppointmentStatus.CANCELLED
         results.append(item)
     return {"history": results}

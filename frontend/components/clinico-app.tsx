@@ -661,11 +661,12 @@ function Dashboard({
 
 function ConnectedAppointmentCard({ appointment, onAction }: { appointment: AppointmentData; onAction: (kind: 'cancel' | 'reschedule' | 'followup') => void }) {
   const date = new Date(appointment.datetime)
+  const isPast = !Number.isNaN(date.getTime()) && date.getTime() < Date.now()
   const isBooked = (appointment.status || '').toUpperCase() === 'BOOKED'
   const isCancelled = (appointment.status || '').toUpperCase() === 'CANCELLED'
 
-  const canReschedule = appointment.can_reschedule ?? isBooked
-  const canCancel = appointment.can_cancel ?? isBooked
+  const canReschedule = !isPast && (appointment.can_reschedule ?? isBooked)
+  const canCancel = !isPast && (appointment.can_cancel ?? isBooked)
   const canFollowup = appointment.can_followup ?? !isCancelled
 
   return (

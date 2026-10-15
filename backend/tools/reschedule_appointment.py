@@ -16,7 +16,6 @@ from backend.database.db import SessionLocal
 from backend.models.data_models import (
     Appointment,
     AppointmentStatus,
-    Doctor,
     AuditLog,
     ActionType,
 )
@@ -28,7 +27,7 @@ from backend.tools.appointment_tools import (
     _is_slot_available,
     suggest_alternative_slots,
     is_within_working_hours,
-    get_doctors_by_department,
+    _get_doctors,
 )
 
 
@@ -55,30 +54,35 @@ def _process_reschedule_request(
     _validate_booked_appointment(appointment)
     validated_dt = _validate_datetime(appointment_datetime)
 
-    # Get doctor and check if they work at the new time
-    doctor_id = appointment.doctor_id
-    doctor = session.get(Doctor, doctor_id)
-    if doctor is None:
-        raise ValueError(f"Doctor with id {doctor_id} does not exist")
+    # Keep the current doctor when possible, then check the other doctors in
+    # the same department. A doctor being off at this time does not mean the
+    # department has no appointment available.
+    doctors = _get_doctors(session, appointment.department_id)
+    doctors.sort(key=lambda item: item.id != appointment.doctor_id)
+    selected_doctor = None
+    for doctor in doctors:
+        if not _is_doctor_working(session, doctor.id, validated_dt):
+            continue
+        if not is_within_working_hours(doctor, validated_dt):
+            continue
+        if not _is_slot_available(session, doctor.id, validated_dt):
+            continue
+        selected_doctor = doctor
+        break
 
-    if not _is_doctor_working(session, doctor_id, validated_dt):
-        raise ValueError("Doctor is not working at the requested time")
-
-    # Check if within working hours
-    if not is_within_working_hours(doctor, validated_dt):
-        raise ValueError("Requested time is outside the doctor's working hours")
-
-    # Check if slot is available
-    if not _is_slot_available(session, doctor_id, validated_dt):
-        # Suggest alternative slots for the same doctor's department
-        department_id = appointment.department_id
-        available_slots = suggest_alternative_slots(department_id, validated_dt)
+    if selected_doctor is None:
+        # This helper checks all doctors in the department and searches the
+        # requested date first, then later dates.
+        available_slots = suggest_alternative_slots(
+            appointment.department_id, validated_dt
+        )
         return {
             "status": "SUGGEST_SLOT",
             "available_slots": available_slots,
         }
 
     # Update appointment
+    appointment.doctor_id = selected_doctor.id
     appointment.appointment_datetime = validated_dt
     if patient_problem is not None:
         appointment.patient_problem = patient_problem
@@ -86,7 +90,10 @@ def _process_reschedule_request(
     audit_log = AuditLog(
         patient_id=patient_id,
         action_type=ActionType.RESCHEDULE,
-        details=f"Rescheduled appointment {appointment.id} to {validated_dt.isoformat()}"
+        details=(
+            f"Rescheduled appointment {appointment.id} with doctor "
+            f"{selected_doctor.id} to {validated_dt.isoformat()}"
+        )
     )
     session.add(audit_log)
     
@@ -97,6 +104,7 @@ def _process_reschedule_request(
         "appointment_datetime": appointment.appointment_datetime.isoformat(),
         "patient_problem": appointment.patient_problem,
         "doctor_id": appointment.doctor_id,
+        "doctor_name": selected_doctor.name,
         "department_id": appointment.department_id,
     }
 

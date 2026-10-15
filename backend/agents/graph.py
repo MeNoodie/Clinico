@@ -168,6 +168,24 @@ def coordinator_node(state: AgentState) -> dict:
         if active_intent in workflow_intents
         else state.get("pending_awaiting_fields", [])
     )
+    # The guided cancel confirmation is sent by the session API and is not in
+    # LangGraph history. Trust the saved action when the patient confirms it.
+    if active_intent == "CANCEL_APPOINTMENT" and state.get("appointment_id"):
+        if re.fullmatch(
+            r"\s*(?:yes|yeah|yep|confirm|proceed|please do|haan|ha|ji)"
+            r"(?:\s+(?:please|proceed|confirm))?[.! ]*\s*",
+            query,
+            re.IGNORECASE,
+        ):
+            intent = "CANCEL_APPOINTMENT"
+        elif re.fullmatch(
+            r"\s*(?:no|nope|nah|nahi|nahin|don't cancel|do not cancel|stop)[.! ]*\s*",
+            query,
+            re.IGNORECASE,
+        ):
+            intent = "OTHER"
+            pending_intent = None
+            pending_awaiting = []
     appointment_id_just_provided = False
     awaiting_id = "appointment_id" in (prior_awaiting or pending_awaiting) and not state.get("appointment_id")
     awaiting_datetime = "appointment_datetime" in (prior_awaiting or pending_awaiting)
@@ -606,7 +624,8 @@ def reschedule_node(state: AgentState) -> dict:
     if status == "RESCHEDULED":
         return {
             "appointment_id": result.get("appointment_id"),
-            "booked_datetime": result.get("appointment_datetime"),
+            "booked_datetime": result.get("appointment_datetime") or result.get("new_datetime"),
+            "doctor_name": result.get("doctor_name") or state.get("doctor_name"),
             "alt_slots": [],
             "current_step": "reschedule_done",
             "error": None,
