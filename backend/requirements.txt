@@ -11,6 +11,7 @@ langchain-core
 passlib[bcrypt]
 python-jose[cryptography]
 sqlalchemy
+psycopg[binary]
 uvicorn
 pyyaml
 langgraph-checkpoint-sqlite

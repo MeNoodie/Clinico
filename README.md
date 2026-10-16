@@ -20,6 +20,74 @@
 
 The app includes a **Next.js frontend** and a **FastAPI backend**. Patient routes require JWT authentication, and appointment and document operations are scoped to the signed-in patient.
 
+## Architecture
+
+### Patient app flow
+
+```mermaid
+flowchart LR
+    Patient[Patient] --> Auth[Sign up / log in]
+    Auth --> Account[User account and patient profile]
+    Account --> Dashboard[Clinico dashboard]
+
+    Dashboard --> Appointments[Appointments]
+    Dashboard --> Documents[Medical documents]
+    Dashboard --> Assistant[Clinico AI assistant]
+    Dashboard --> Profile[Profile]
+
+    Appointments --> Actions[Book, cancel, reschedule, or follow up]
+    Actions --> Session[Guided chat session]
+    Assistant --> Session
+    Session --> Thread[LangGraph thread<br/>thread_id = session_id]
+
+    Documents --> Upload[Upload and manage reports]
+    Profile --> ProfileAPI[Profile API]
+    Actions --> API[FastAPI]
+    Thread --> API
+    Upload --> API
+```
+
+### Appointment workflow
+
+```mermaid
+flowchart TD
+    Start[Chat session reply] --> Safety[Safety agent]
+    Safety -->|Emergency| Emergency[Emergency response]
+    Safety -->|Normal| Coordinator[Coordinator agent]
+
+    Coordinator -->|Missing details| Ask[Ask for missing information]
+    Coordinator -->|Booking or date/time needed| Router[Router agent]
+    Coordinator -->|Cancel| CancelNode[Cancel node]
+    Coordinator -->|Reschedule| RescheduleNode[Reschedule node]
+    Coordinator -->|Follow-up lookup| FollowupNode[Follow-up node]
+
+    Router -->|Missing details| Ask
+    Router -->|Book| AppointmentNode[Appointment node]
+    Router -->|Reschedule| RescheduleNode
+
+    AppointmentNode --> AppointmentAgent[Appointment agent]
+    AppointmentAgent --> BookingTool[process_booking_request]
+    RescheduleNode --> RescheduleAgent[Reschedule agent]
+    RescheduleAgent --> RescheduleTool[process_reschedule_request]
+    CancelNode --> CancelAgent[Cancel agent]
+    CancelAgent --> CancelTool[process_cancel_request]
+    FollowupNode --> FollowupAgent[Follow-up agent]
+    FollowupAgent --> DetailsTool[get_appointment_details]
+
+    BookingTool --> DB[(Application database)]
+    RescheduleTool --> DB
+    CancelTool --> DB
+    DetailsTool --> DB
+
+    AppointmentNode --> Response[Response agent]
+    RescheduleNode --> Response
+    CancelNode --> Response
+    FollowupNode --> Response
+    Ask --> Reply[Reply to patient]
+    Emergency --> Reply
+    Response --> Reply
+```
+
 ## Project layout
 
 - `backend/agents/` — LangGraph workflow and agent logic.
